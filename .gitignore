@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Credenciais e variáveis locais
+.env
+.env.*
+!.env.example

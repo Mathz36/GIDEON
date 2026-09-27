@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model AiConfiguration {
+  id           String   @id @default("ai-config")
+  systemPrompt String   @db.Text
+  temperature  Float    @default(0.7)
+  topP         Float    @default(0.9)
+  memorySize   Int      @default(10)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("ai_configurations")
+}
+
+model ErpConfiguration {
+  id             String    @id @default(uuid())
+  context        String
+  description    String    @db.Text
+  query          String    @db.Text
+  expectedFields String[]
+  tableName      String
+  primaryKey     String?   // Campo definido como Chave Primária (PK)
+
+  // Agendamento da atualização automática
+  syncFrequency   String    @default("HOURS") // MINUTES, HOURS, DAILY, MONTHLY, MANUAL
+  syncInterval    Int?      @default(1)       // Quantidade de minutos ou horas
+  syncTime        String?   @default("08:00") // Horário do dia (HH:mm) para DIÁRIO e MENSAL
+  syncDayOfMonth  Int?      @default(1)       // Dia do mês (1 a 31) para MENSAL
+  syncActive      Boolean   @default(true)
+  lastSyncAt      DateTime?
+  nextSyncAt      DateTime?
+  lastSyncStatus  String?   // SUCCESS, ERROR, RUNNING
+  lastSyncMessage String?
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("erp_configurations")
+}
+
+model MetaTable {
+  id          String       @id @default(uuid())
+  tenantId    String
+  tableName   String
+  description String       @db.Text
+  columns     MetaColumn[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([tenantId, tableName])
+  @@index([tenantId])
+  @@map("meta_tables")
+}
+
+model MetaColumn {
+  id                 String    @id @default(uuid())
+  metaTableId        String
+  columnName         String
+  dataType           String    @default("TEXT")
+  description        String    @db.Text
+  isPrimaryKey       Boolean   @default(false)
+  foreignKeyToTable  String?
+  foreignKeyToColumn String?
+  metaTable          MetaTable @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([metaTableId, columnName])
+  @@index([metaTableId])
+  @@map("meta_columns")
+}
+
