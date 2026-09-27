@@ -78,3 +78,17 @@ model MetaColumn {
   @@map("meta_columns")
 }
 
+model Usuario {
+  id              String   @id @default(uuid())
+  nome            String
+  email           String   @unique
+  senha_hash      String   @map("senha_hash")
+  usuario_erp     String   @map("usuario_erp")
+  cod_gerente_erp String   @map("cod_gerente_erp")
+  tipo_acesso     String   @default("GERENTE") @map("tipo_acesso") // ADMIN | GERENTE
+  criado_em       DateTime @default(now()) @map("criado_em")
+  atualizado_em   DateTime @updatedAt @map("atualizado_em")
+
+  @@map("usuarios")
+}
+

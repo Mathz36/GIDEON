@@ -1,70 +1,62 @@
-import { Router } from 'express';
+import { Router, Response } from 'express';
 import authService from '../services/auth.service';
 import { AuthenticatedRequest, requireAuth } from '../middlewares/auth.middleware';
 
 const authRouter = Router();
 
-authRouter.post('/login/admin', async (req, res, next) => {
+/**
+ * Login unificado de usuários (Admin e Gerente) com e-mail e senha.
+ */
+authRouter.post('/login', async (req, res: Response) => {
 	try {
-		const { login, password } = req.body ?? {};
+		const { email, login, password } = req.body ?? {};
+		const emailToUse = (typeof email === 'string' && email.trim()) ? email : login;
 
-		if (typeof login !== 'string' || !login.trim()) {
-			res.status(400).json({ error: 'Informe o usuário ou e-mail de administrador.' });
+		if (typeof emailToUse !== 'string' || !emailToUse.trim()) {
+			res.status(400).json({ error: 'Informe o e-mail de acesso.' });
 			return;
 		}
 
 		if (typeof password !== 'string' || !password) {
-			res.status(400).json({ error: 'Informe a senha de administrador.' });
+			res.status(400).json({ error: 'Informe a senha de acesso.' });
 			return;
 		}
 
-		const result = await authService.loginAdmin(login, password);
+		const result = await authService.login(emailToUse, password);
 		res.status(200).json(result);
 	} catch (error) {
 		res.status(401).json({ error: error instanceof Error ? error.message : 'Falha na autenticação.' });
 	}
 });
 
-authRouter.post('/otp/request', async (req, res, next) => {
+// Alias para compatibilidade
+authRouter.post('/login/admin', async (req, res: Response) => {
 	try {
-		const { email } = req.body ?? {};
+		const { email, login, password } = req.body ?? {};
+		const emailToUse = (typeof email === 'string' && email.trim()) ? email : login;
 
-		if (typeof email !== 'string' || !email.trim()) {
-			res.status(400).json({ error: 'Informe o e-mail cadastrado no ERP.' });
+		if (typeof emailToUse !== 'string' || !emailToUse.trim()) {
+			res.status(400).json({ error: 'Informe o e-mail ou usuário de acesso.' });
 			return;
 		}
 
-		const result = await authService.requestGerenteOtp(email);
+		if (typeof password !== 'string' || !password) {
+			res.status(400).json({ error: 'Informe a senha.' });
+			return;
+		}
+
+		const result = await authService.login(emailToUse, password);
 		res.status(200).json(result);
 	} catch (error) {
-		res.status(400).json({ error: error instanceof Error ? error.message : 'Falha ao solicitar código.' });
+		res.status(401).json({ error: error instanceof Error ? error.message : 'Falha na autenticação.' });
 	}
 });
 
-authRouter.post('/otp/verify', async (req, res, next) => {
-	try {
-		const { email, code } = req.body ?? {};
-
-		if (typeof email !== 'string' || !email.trim()) {
-			res.status(400).json({ error: 'Informe o e-mail.' });
-			return;
-		}
-
-		if (typeof code !== 'string' || !code.trim()) {
-			res.status(400).json({ error: 'Informe o código de 6 dígitos recebido por e-mail.' });
-			return;
-		}
-
-		const result = await authService.verifyGerenteOtp(email, code);
-		res.status(200).json(result);
-	} catch (error) {
-		res.status(400).json({ error: error instanceof Error ? error.message : 'Código inválido ou expirado.' });
-	}
-});
-
-authRouter.get('/me', requireAuth, (req: AuthenticatedRequest, res) => {
+/**
+ * Retorna dados da sessão do usuário autenticado.
+ */
+authRouter.get('/me', requireAuth, (req: AuthenticatedRequest, res: Response) => {
 	res.status(200).json({ user: req.user });
 });
 
 export default authRouter;
-

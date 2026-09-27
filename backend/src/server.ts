@@ -5,6 +5,7 @@ import express from 'express';
 
 import apiRouter, { apiErrorHandler } from './routes/api';
 import erpSyncScheduler from './services/erp-sync.scheduler';
+import authService from './services/auth.service';
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
@@ -25,6 +26,7 @@ app.use(apiErrorHandler);
 app.listen(port, () => {
 	console.info(`Servidor do Gideon escutando na porta ${port}.`);
 	erpSyncScheduler.start();
+	void authService.ensureInitialAdmin();
 });
 
 export default app;

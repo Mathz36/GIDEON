@@ -6,6 +6,7 @@ import aiConfigurationService, { AiConfigurationInput } from '../services/ai-con
 import chatRagService from '../services/chat-rag.service';
 import SankhyaService from '../services/sankhya.service';
 import authRouter from './auth.routes';
+import userRouter from './user.routes';
 import { requireAuth, requireAdmin } from '../middlewares/auth.middleware';
 
 interface ErpQueryBody {
@@ -35,6 +36,7 @@ interface ErpConfigurationBody {
 const apiRouter = Router();
 
 apiRouter.use('/auth', authRouter);
+apiRouter.use('/users', userRouter);
 
 apiRouter.post('/erp/query', requireAuth, async (req: Request<Record<string, string>, unknown, ErpQueryBody>, res, next) => {
 	try {

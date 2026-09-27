@@ -25,23 +25,18 @@ export default function Chat() {
 	};
 
 	return (
-		<main className="flex h-screen flex-col overflow-hidden bg-slate-50 text-slate-900">
-			<header className="border-b border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-6">
-				<div className="mx-auto flex max-w-4xl items-center gap-3">
-					<div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold text-white">G</div>
-					<div>
-						<h1 className="font-semibold">Gideon</h1>
-						<p className="text-xs text-slate-500">Assistente com dados do ERP</p>
-					</div>
-				</div>
-			</header>
-
+		<main className="flex h-full flex-col overflow-hidden bg-slate-50 text-slate-900">
 			<section className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col px-4 sm:px-6">
-				<div className="min-h-0 flex-1 space-y-5 overflow-y-auto py-8" aria-live="polite">
+				<div className="min-h-0 flex-1 space-y-5 overflow-y-auto py-6" aria-live="polite">
 					{messages.length === 0 && (
-						<div className="mx-auto mt-16 max-w-md text-center">
-							<h2 className="text-xl font-semibold">Como posso ajudar?</h2>
-							<p className="mt-2 text-sm leading-6 text-slate-500">Envie uma pergunta para iniciar a conversa com o Gideon.</p>
+						<div className="mx-auto mt-14 max-w-md text-center">
+							<div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-600 text-lg font-bold text-white shadow-md">
+								G
+							</div>
+							<h2 className="text-xl font-semibold text-slate-800">Como posso ajudar hoje?</h2>
+							<p className="mt-2 text-sm leading-6 text-slate-500">
+								Envie sua pergunta para consultar clientes, vendas e dados do ERP em tempo real com o Gideon.
+							</p>
 						</div>
 					)}
 

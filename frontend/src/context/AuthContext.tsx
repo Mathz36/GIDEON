@@ -6,6 +6,7 @@ interface AuthContextType {
 	user: User | null;
 	token: string | null;
 	isLoading: boolean;
+	login: (email: string, pass: string) => Promise<void>;
 	loginAdmin: (login: string, pass: string) => Promise<void>;
 	requestOtp: (email: string) => Promise<OtpRequestResponse>;
 	verifyOtp: (email: string, code: string) => Promise<void>;
@@ -56,22 +57,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		void checkSession();
 	}, []);
 
-	const loginAdmin = async (login: string, pass: string): Promise<void> => {
-		const response = await fetch('/api/auth/login/admin', {
+	const login = async (email: string, pass: string): Promise<void> => {
+		const response = await fetch('/api/auth/login', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ login, password: pass }),
+			body: JSON.stringify({ email, password: pass }),
 		});
 
 		const data = await response.json() as AuthResponse & { error?: string };
 
 		if (!response.ok) {
-			throw new Error(data.error ?? 'Falha no login de administrador.');
+			throw new Error(data.error ?? 'Falha na autenticação.');
 		}
 
 		localStorage.setItem(TOKEN_KEY, data.token);
 		setToken(data.token);
 		setUser(data.user);
+	};
+
+	const loginAdmin = async (loginInput: string, pass: string): Promise<void> => {
+		return login(loginInput, pass);
 	};
 
 	const requestOtp = async (email: string): Promise<OtpRequestResponse> => {
@@ -124,6 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 				user,
 				token,
 				isLoading,
+				login,
 				loginAdmin,
 				requestOtp,
 				verifyOtp,
@@ -143,4 +149,3 @@ export function useAuth() {
 	}
 	return context;
 }
-
