@@ -29,6 +29,13 @@ model ErpConfiguration {
   tableName      String
   primaryKey     String?   // Campo definido como Chave Primária (PK)
 
+  // Estratégia de sincronização e paginação incremental (FULL ou HASH_COMPARATOR)
+  syncStrategy   String    @default("FULL") // FULL ou HASH_COMPARATOR
+  lastSyncCursor String?
+  batchSize      Int       @default(1000)
+  activeColumn   String?
+  activeValue    String?
+
   // Agendamento da atualização automática
   syncFrequency   String    @default("HOURS") // MINUTES, HOURS, DAILY, MONTHLY, MANUAL
   syncInterval    Int?      @default(1)       // Quantidade de minutos ou horas

@@ -12,6 +12,11 @@ export interface ErpConfigurationInput {
 	query: string;
 	expectedFields: string[];
 	primaryKey?: string;
+	syncStrategy?: 'FULL' | 'HASH_COMPARATOR' | 'INCREMENTAL';
+	lastSyncCursor?: string;
+	batchSize?: number;
+	activeColumn?: string;
+	activeValue?: string;
 	syncFrequency?: SyncFrequency;
 	syncInterval?: number;
 	syncTime?: string;
@@ -58,15 +63,22 @@ export class ErpConfigurationService implements IErpConfigurationService {
 	async create(input: ErpConfigurationInput): Promise<PrismaErpConfig> {
 		const tableName = this.tableManager.generateTableName(input.context);
 
-		// 1. Cria a tabela dinâmica no banco com as colunas definidas em expectedFields
-		await this.tableManager.createTable(tableName, input.expectedFields);
+		const primaryKey = input.primaryKey?.trim() || null;
+
+		// 1. Cria a tabela dinâmica no banco com as colunas definidas em expectedFields e índice na PK
+		await this.tableManager.createTable(tableName, input.expectedFields, primaryKey);
+
+		const syncStrategy = input.syncStrategy ?? 'FULL';
+		const lastSyncCursor = input.lastSyncCursor?.trim() || null;
+		const batchSize = input.batchSize ? Math.max(1, input.batchSize) : 1000;
+		const activeColumn = input.activeColumn?.trim() || null;
+		const activeValue = input.activeValue?.trim() || null;
 
 		const syncFrequency = input.syncFrequency ?? 'HOURS';
 		const syncInterval = input.syncInterval ?? 1;
 		const syncTime = input.syncTime ?? '08:00';
 		const syncDayOfMonth = input.syncDayOfMonth ?? 1;
 		const syncActive = input.syncActive ?? true;
-		const primaryKey = input.primaryKey?.trim() || null;
 
 		// Calcula a próxima execução do agendamento
 		const nextSyncAt = this.scheduler.calculateNextSync({
@@ -86,6 +98,11 @@ export class ErpConfigurationService implements IErpConfigurationService {
 				expectedFields: input.expectedFields.map((f) => f.trim()).filter(Boolean),
 				tableName,
 				primaryKey,
+				syncStrategy,
+				lastSyncCursor,
+				batchSize,
+				activeColumn,
+				activeValue,
 				syncFrequency,
 				syncInterval,
 				syncTime,
@@ -125,15 +142,22 @@ export class ErpConfigurationService implements IErpConfigurationService {
 			return null;
 		}
 
+		const primaryKey = input.primaryKey !== undefined ? (input.primaryKey?.trim() || null) : existing.primaryKey;
+
 		// Garante a existência da tabela e adiciona novas colunas caso haja novos campos
-		await this.tableManager.syncColumns(existing.tableName, input.expectedFields);
+		await this.tableManager.syncColumns(existing.tableName, input.expectedFields, primaryKey);
+
+		const syncStrategy = input.syncStrategy ?? existing.syncStrategy ?? 'FULL';
+		const lastSyncCursor = input.lastSyncCursor !== undefined ? (input.lastSyncCursor?.trim() || null) : existing.lastSyncCursor;
+		const batchSize = input.batchSize !== undefined ? Math.max(1, input.batchSize) : (existing.batchSize ?? 1000);
+		const activeColumn = input.activeColumn !== undefined ? (input.activeColumn?.trim() || null) : existing.activeColumn;
+		const activeValue = input.activeValue !== undefined ? (input.activeValue?.trim() || null) : existing.activeValue;
 
 		const syncFrequency = input.syncFrequency ?? existing.syncFrequency;
 		const syncInterval = input.syncInterval !== undefined ? input.syncInterval : existing.syncInterval;
 		const syncTime = input.syncTime ?? existing.syncTime;
 		const syncDayOfMonth = input.syncDayOfMonth !== undefined ? input.syncDayOfMonth : existing.syncDayOfMonth;
 		const syncActive = input.syncActive !== undefined ? input.syncActive : existing.syncActive;
-		const primaryKey = input.primaryKey !== undefined ? (input.primaryKey?.trim() || null) : existing.primaryKey;
 
 		const nextSyncAt = this.scheduler.calculateNextSync({
 			syncFrequency,
@@ -151,6 +175,11 @@ export class ErpConfigurationService implements IErpConfigurationService {
 				query: input.query.trim(),
 				expectedFields: input.expectedFields.map((f) => f.trim()).filter(Boolean),
 				primaryKey,
+				syncStrategy,
+				lastSyncCursor,
+				batchSize,
+				activeColumn,
+				activeValue,
 				syncFrequency,
 				syncInterval,
 				syncTime,

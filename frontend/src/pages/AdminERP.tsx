@@ -9,7 +9,10 @@ import {
 	Copy,
 	Database,
 	Edit2,
+	Filter,
+	Info,
 	KeyRound,
+	Layers,
 	Play,
 	Plus,
 	RefreshCw,
@@ -20,6 +23,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 
 export type SyncFrequency = 'MINUTES' | 'HOURS' | 'DAILY' | 'MONTHLY' | 'MANUAL';
+export type SyncStrategy = 'FULL' | 'HASH_COMPARATOR' | 'INCREMENTAL';
 
 export interface ErpConfigurationPayload {
 	id?: string;
@@ -29,6 +33,11 @@ export interface ErpConfigurationPayload {
 	expectedFields: string[];
 	primaryKey?: string;
 	tableName?: string;
+	syncStrategy?: SyncStrategy;
+	lastSyncCursor?: string;
+	batchSize?: number;
+	activeColumn?: string;
+	activeValue?: string;
 	syncFrequency?: SyncFrequency;
 	syncInterval?: number;
 	syncTime?: string;
@@ -125,6 +134,12 @@ export default function AdminERP() {
 	const [expectedFields, setExpectedFields] = useState<string[]>([createEmptyField()]);
 	const [primaryKey, setPrimaryKey] = useState<string>('');
 
+	// Estados de Estratégia de Carga & Soft Delete
+	const [syncStrategy, setSyncStrategy] = useState<SyncStrategy>('FULL');
+	const [batchSize, setBatchSize] = useState<number>(1000);
+	const [activeColumn, setActiveColumn] = useState<string>('');
+	const [activeValue, setActiveValue] = useState<string>('');
+
 	// Estados do Agendamento
 	const [syncFrequency, setSyncFrequency] = useState<SyncFrequency>('HOURS');
 	const [syncInterval, setSyncInterval] = useState<number>(1);
@@ -168,6 +183,10 @@ export default function AdminERP() {
 		setQuery('');
 		setExpectedFields([createEmptyField()]);
 		setPrimaryKey('');
+		setSyncStrategy('FULL');
+		setBatchSize(1000);
+		setActiveColumn('');
+		setActiveValue('');
 		setSyncFrequency('HOURS');
 		setSyncInterval(1);
 		setSyncTime('08:00');
@@ -188,6 +207,10 @@ export default function AdminERP() {
 		setQuery(config.query);
 		setExpectedFields([...config.expectedFields]);
 		setPrimaryKey(config.primaryKey ?? (config.expectedFields[0] || ''));
+		setSyncStrategy(config.syncStrategy ?? 'FULL');
+		setBatchSize(config.batchSize ?? 1000);
+		setActiveColumn(config.activeColumn ?? '');
+		setActiveValue(config.activeValue ?? '');
 		setSyncFrequency(config.syncFrequency ?? 'HOURS');
 		setSyncInterval(config.syncInterval ?? 1);
 		setSyncTime(config.syncTime ?? '08:00');
@@ -220,6 +243,12 @@ export default function AdminERP() {
 			return;
 		}
 
+		// Validação de Regra de Negócio: Se HASH_COMPARATOR (Incremental), Chave Primária é estritamente obrigatória
+		if ((syncStrategy === 'HASH_COMPARATOR' || syncStrategy === 'INCREMENTAL') && !primaryKey.trim()) {
+			setError('A Sincronização Incremental Inteligente (HASH_COMPARATOR) exige que a Chave Primária (PK) seja informada.');
+			return;
+		}
+
 		const cleanPk = primaryKey.trim();
 		const pkExists = cleanFields.some((f) => f.toUpperCase() === cleanPk.toUpperCase());
 		if (!pkExists) {
@@ -235,6 +264,10 @@ export default function AdminERP() {
 				query: query.trim(),
 				expectedFields: cleanFields,
 				primaryKey: cleanPk,
+				syncStrategy,
+				batchSize: Number(batchSize) || 1000,
+				activeColumn: activeColumn.trim() || undefined,
+				activeValue: activeValue.trim() || undefined,
 				syncFrequency,
 				syncInterval: Number(syncInterval) || 1,
 				syncTime,
@@ -364,6 +397,10 @@ export default function AdminERP() {
 		setQuery(source.query);
 		setExpectedFields([...source.expectedFields]);
 		setPrimaryKey(source.primaryKey ?? (source.expectedFields[0] || ''));
+		setSyncStrategy(source.syncStrategy ?? 'FULL');
+		setBatchSize(source.batchSize ?? 1000);
+		setActiveColumn(source.activeColumn ?? '');
+		setActiveValue(source.activeValue ?? '');
 		setSyncFrequency(source.syncFrequency ?? 'HOURS');
 		setSyncInterval(source.syncInterval ?? 1);
 		setSyncTime(source.syncTime ?? '08:00');
@@ -515,11 +552,20 @@ export default function AdminERP() {
 											{config.description || 'Sem descrição.'}
 										</p>
 
-										{/* Badges de Agendamento e Chave Primária (PK) */}
+										{/* Badges de Agendamento, Estratégia e Chave Primária (PK) */}
 										<div className="mt-3 flex flex-wrap items-center gap-2">
 											<span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-medium ${scheduleBadge.bg}`}>
 												<Clock className="h-3 w-3" />
 												{scheduleBadge.text}
+											</span>
+
+											<span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-semibold ${
+												config.syncStrategy === 'HASH_COMPARATOR' || config.syncStrategy === 'INCREMENTAL'
+													? 'border-indigo-200 bg-indigo-50 text-indigo-800'
+													: 'border-slate-200 bg-slate-50 text-slate-700'
+											}`}>
+												<Layers className="h-3 w-3 text-indigo-500" />
+												{config.syncStrategy === 'HASH_COMPARATOR' || config.syncStrategy === 'INCREMENTAL' ? 'Hash Comparator' : 'Full Paginado'}
 											</span>
 
 											{config.primaryKey && (
@@ -873,6 +919,153 @@ export default function AdminERP() {
 									</div>
 									<div className="mt-1.5">
 										<SqlEditor id="query" value={query} onChange={setQuery} />
+									</div>
+								</div>
+
+								{/* Seção: Configurações Avançadas de Extração */}
+								<div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-4">
+									<div className="flex items-center gap-2 border-b border-slate-200 pb-3">
+										<div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-white shadow-xs">
+											<Layers className="h-4 w-4" />
+										</div>
+										<div>
+											<h3 className="text-xs font-bold text-slate-900">
+												Configurações Avançadas de Extração
+											</h3>
+											<p className="text-[11px] text-slate-500">
+												Defina a estratégia de sincronização, paginação por lotes e regras de inativação (Soft Delete).
+											</p>
+										</div>
+									</div>
+
+									{/* Estratégia de Sincronização & Batch Size */}
+									<div className="grid gap-4 sm:grid-cols-2">
+										<div>
+											<label className="block text-xs font-semibold text-slate-700 mb-1.5">
+												Estratégia de Sincronização
+											</label>
+											<div className="grid grid-cols-1 gap-2">
+												<label
+													onClick={() => setSyncStrategy('FULL')}
+													className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer text-xs transition ${
+														syncStrategy === 'FULL'
+															? 'border-indigo-600 bg-indigo-50/80 text-indigo-950 ring-1 ring-indigo-500'
+															: 'border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50'
+													}`}
+												>
+													<input
+														type="radio"
+														name="syncStrategy"
+														value="FULL"
+														checked={syncStrategy === 'FULL'}
+														onChange={() => setSyncStrategy('FULL')}
+														className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
+													/>
+													<div>
+														<span className="font-bold block">Sincronização Completa Paginada (FULL)</span>
+														<span className="text-[11px] text-slate-500 block mt-0.5">
+															TRUNCATE e recarga total em lotes seguros para tabelas menores ou estáticas.
+														</span>
+													</div>
+												</label>
+
+												<label
+													onClick={() => setSyncStrategy('HASH_COMPARATOR')}
+													className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer text-xs transition ${
+														syncStrategy === 'HASH_COMPARATOR' || syncStrategy === 'INCREMENTAL'
+															? 'border-indigo-600 bg-indigo-50/80 text-indigo-950 ring-1 ring-indigo-500'
+															: 'border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50'
+													}`}
+												>
+													<input
+														type="radio"
+														name="syncStrategy"
+														value="HASH_COMPARATOR"
+														checked={syncStrategy === 'HASH_COMPARATOR' || syncStrategy === 'INCREMENTAL'}
+														onChange={() => setSyncStrategy('HASH_COMPARATOR')}
+														className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
+													/>
+													<div>
+														<span className="font-bold block">Sincronização Incremental Inteligente (HASH_COMPARATOR)</span>
+														<span className="text-[11px] text-slate-500 block mt-0.5">
+															Calcula hash MD5 linha a linha e grava no Postgres apenas o que realmente mudou.
+														</span>
+													</div>
+												</label>
+											</div>
+
+											{(syncStrategy === 'HASH_COMPARATOR' || syncStrategy === 'INCREMENTAL') && (
+												<p className="mt-2 text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200/80 rounded-lg p-2 flex items-start gap-1.5">
+													<Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-indigo-600" />
+													<span>
+														No SQL acima, utilize as macros <code className="font-mono font-bold bg-white px-1 py-0.5 rounded border border-indigo-200">{'{{LAST_CURSOR}}'}</code> e/ou <code className="font-mono font-bold bg-white px-1 py-0.5 rounded border border-indigo-200">{'{{LAST_SYNC_DATE}}'}</code> para filtrar os novos registros.
+													</span>
+												</p>
+											)}
+										</div>
+
+										<div>
+											<label className="block text-xs font-semibold text-slate-700" htmlFor="batchSize">
+												Tamanho do Lote (Batch Size)
+											</label>
+											<div className="mt-1.5 flex items-center gap-2">
+												<input
+													id="batchSize"
+													type="number"
+													min="100"
+													max="50000"
+													step="100"
+													value={batchSize}
+													onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value, 10) || 1000))}
+													className="block w-36 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+												/>
+												<span className="text-xs text-slate-500">linhas por lote (padrão: 1000)</span>
+											</div>
+											<p className="mt-1.5 text-[11px] text-slate-500">
+												Evita timeouts de rede no Sankhya ao transferir tabelas com milhões de registros.
+											</p>
+										</div>
+									</div>
+
+									{/* Tratamento de Inativos (Soft Delete) */}
+									<div className="pt-3 border-t border-slate-200">
+										<div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+											<Filter className="h-3.5 w-3.5 text-slate-500" />
+											<span>Tratamento de Inativos (Soft Delete do ERP)</span>
+										</div>
+										<p className="text-xs text-gray-500 mt-0.5 mb-2.5">
+											Registros que vierem com valor diferente deste serão excluídos fisicamente da IA.
+										</p>
+
+										<div className="grid gap-3 sm:grid-cols-2">
+											<div>
+												<label className="block text-xs font-medium text-slate-700" htmlFor="activeColumn">
+													Coluna Indicadora de Ativo (ex: STATUS, ATIVO)
+												</label>
+												<input
+													id="activeColumn"
+													type="text"
+													value={activeColumn}
+													onChange={(e) => setActiveColumn(e.target.value.toUpperCase())}
+													placeholder="Ex: STATUS, ATIVO"
+													className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-xs uppercase text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+												/>
+											</div>
+
+											<div>
+												<label className="block text-xs font-medium text-slate-700" htmlFor="activeValue">
+													Valor que representa Ativo (ex: S, A, 1)
+												</label>
+												<input
+													id="activeValue"
+													type="text"
+													value={activeValue}
+													onChange={(e) => setActiveValue(e.target.value)}
+													placeholder="Ex: S, A, 1"
+													className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+												/>
+											</div>
+										</div>
 									</div>
 								</div>
 

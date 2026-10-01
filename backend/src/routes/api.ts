@@ -8,6 +8,9 @@ import SankhyaService from '../services/sankhya.service';
 import authRouter from './auth.routes';
 import userRouter from './user.routes';
 import { requireAuth, requireAdmin } from '../middlewares/auth.middleware';
+import prismaClient from '../config/prisma';
+import erpSyncScheduler from '../services/erp-sync.scheduler';
+import syncQueueManager from '../services/sync-queue.manager';
 
 interface ErpQueryBody {
 	query?: unknown;
@@ -25,12 +28,17 @@ interface ErpConfigurationBody {
 	description?: unknown;
 	query?: unknown;
 	expectedFields?: unknown;
+	primaryKey?: unknown;
+	syncStrategy?: unknown;
+	lastSyncCursor?: unknown;
+	batchSize?: unknown;
+	activeColumn?: unknown;
+	activeValue?: unknown;
 	syncFrequency?: unknown;
 	syncInterval?: unknown;
 	syncTime?: unknown;
 	syncDayOfMonth?: unknown;
 	syncActive?: unknown;
-	primaryKey?: unknown;
 }
 
 const apiRouter = Router();
@@ -95,11 +103,28 @@ apiRouter.delete('/erp/configurations/:id', requireAdmin, async (req: Request<{ 
 
 apiRouter.post('/erp/configurations/:id/sync', requireAdmin, async (req: Request<{ id: string }>, res, next) => {
 	try {
-		const result = await erpConfigurationService.syncNow(req.params.id);
-		res.status(200).json({ data: result });
+		const config = await prismaClient.erpConfiguration.findUnique({
+			where: { id: req.params.id },
+		});
+
+		if (!config) {
+			res.status(404).json({ error: 'Configuração SQL não encontrada.' });
+			return;
+		}
+
+		const result = await erpSyncScheduler.executeJob(config);
+		res.status(200).json({
+			success: result.success,
+			message: result.message,
+			data: result,
+		});
 	} catch (error) {
 		next(error);
 	}
+});
+
+apiRouter.get('/erp/queue', requireAdmin, (_req, res) => {
+	res.status(200).json({ data: syncQueueManager.getStatus() });
 });
 
 apiRouter.get('/ai/configurations', requireAdmin, async (_req, res, next) => {
@@ -288,12 +313,39 @@ function validateErpConfiguration(body: ErpConfigurationBody): ErpConfigurationI
 		primaryKey = body.primaryKey.trim();
 	}
 
+	let syncStrategy: 'FULL' | 'HASH_COMPARATOR' | 'INCREMENTAL' | undefined;
+	if (body.syncStrategy !== undefined && body.syncStrategy !== null) {
+		const s = String(body.syncStrategy).trim().toUpperCase();
+		if (s !== 'FULL' && s !== 'HASH_COMPARATOR' && s !== 'INCREMENTAL') {
+			throw new RequestValidationError('syncStrategy deve ser FULL ou HASH_COMPARATOR.');
+		}
+		syncStrategy = (s === 'INCREMENTAL' ? 'HASH_COMPARATOR' : s) as 'FULL' | 'HASH_COMPARATOR';
+	}
+
+	let batchSize: number | undefined;
+	if (body.batchSize !== undefined && body.batchSize !== null) {
+		const parsed = Number(body.batchSize);
+		if (Number.isNaN(parsed) || parsed < 1) {
+			throw new RequestValidationError('batchSize deve ser um número maior ou igual a 1.');
+		}
+		batchSize = Math.floor(parsed);
+	}
+
+	const lastSyncCursor = typeof body.lastSyncCursor === 'string' ? body.lastSyncCursor.trim() : undefined;
+	const activeColumn = typeof body.activeColumn === 'string' ? body.activeColumn.trim() : undefined;
+	const activeValue = typeof body.activeValue === 'string' ? body.activeValue.trim() : undefined;
+
 	return {
 		context: body.context.trim(),
 		description: typeof body.description === 'string' ? body.description.trim() : '',
 		query: body.query,
 		expectedFields: validateExpectedFields(body.expectedFields),
 		primaryKey,
+		syncStrategy,
+		lastSyncCursor,
+		batchSize,
+		activeColumn,
+		activeValue,
 		syncFrequency,
 		syncInterval,
 		syncTime,
