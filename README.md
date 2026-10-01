@@ -142,18 +142,47 @@ O banco de dados armazena metadados de qualquer tabela dinâmica criada pelos us
 
 ---
 
-## 5. Mecanismo Dinâmico de Tabelas & Agendador ERP
+## 5. Motor de Sincronização ERP, Filas & Tabelas Dinâmicas
 
 ### DynamicTableManager (`backend/src/services/dynamic-table.manager.ts`)
-Responsável por gerenciar o ciclo de vida físico de tabelas dinâmicas no PostgreSQL:
-- **Sanitização de Nomes:** Converte contextos em nomes válidos (`erp_<contexto_sanitizado>`).
-- **Criação de DDL Dinâmico:** Gera `CREATE TABLE IF NOT EXISTS ...` com colunas do tipo `TEXT` e coluna técnica `_synced_at TIMESTAMP`.
-- **Evolução de Esquema (`syncColumns`):** Se uma nova coluna for adicionada à query do Sankhya, o gerenciador executa automaticamente `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
-- **Carga de Dados (`truncateAndInsert`):** Executa transação segura (`BEGIN; TRUNCATE; INSERT; COMMIT`) com queries parametrizadas em lotes de 100 registros.
+Responsável pelo ciclo de vida físico das tabelas dinâmicas no PostgreSQL, controle estrito de memória do V8 Heap e execução das estratégias de sincronização com o Sankhya ERP:
+
+- **Estratégias Estritas de Sincronização:**
+  1. `FULL` **(Sincronização Completa Paginada):**
+     - Trunca a tabela no PostgreSQL (`TRUNCATE TABLE`).
+     - Executa paginação universal por `OFFSET` (via `ROWNUM` no Oracle) ou por macro `{{LAST_CURSOR}}`.
+     - Insere os dados em massa em sub-lotes controlados de 500 registros, gerando e persistindo o `_row_hash` para cada linha.
+     - Libera explicitamente arrays e referências a cada lote para estabilidade do Garbage Collector (V8 Heap).
+  2. `HASH_COMPARATOR` **(Sincronização Incremental Inteligente por Hash):**
+     - Varre os dados do ERP em lotes configuráveis (`batchSize`).
+     - Calcula em memória o Hash MD5 determinístico (`_row_hash`) de cada linha recebida.
+     - Consulta no PostgreSQL apenas os hashes atuais das PKs daquele lote (`SELECT pk, _row_hash WHERE pk IN (...)`).
+     - Compara linha a linha: linhas com hash idêntico são **descartadas imediatamente da memória** (economia massiva de CPU, rede e I/O).
+     - Linhas novas ou modificadas sofrem `UPSERT` nativo via `INSERT ... ON CONFLICT ("primary_key") DO UPDATE SET ...`.
+     - Reconciliação inteligente: em varreduras totais, identifica e executa Hard Delete (`DELETE FROM ... WHERE pk IN (...)`) para registros ausentes no ERP.
+- **Hash MD5 Determinístico (`generateRowHash`):**
+  - Concatena chave e valor ordenados alfabeticamente (`campo1:valor1|campo2:valor2`).
+  - Isola metadados técnicos (`_id`, `_row_hash`, `_synced_at`, `created_at`), garantindo que alterações na ordem das colunas da query não gerem falsos positivos.
+- **Prevenção de Loops Infinitos & Paginação Híbrida:**
+  - Se a query SQL do usuário não possuir a macro `{{LAST_CURSOR}}`, o sistema pagina automaticamente via `OFFSET` e `ROWNUM` do Oracle.
+  - Guarda anti-estagnação (*stall detection*): se a macro `{{LAST_CURSOR}}` for utilizada e o cursor não avançar entre lotes consecutivos, o loop é interrompido com alerta.
+- **Arquitetura de Chaves e Isolamento DDL:**
+  - A chave surrogate técnica interna do PostgreSQL é nomeada como `"_id" BIGSERIAL PRIMARY KEY`.
+  - Caso a query do ERP utilize uma chave de negócio chamada `"id"` ou `"ID"` (ex: concatenações de strings como `CODPARC || '-' || CODVEND`), esta é criada como coluna de negócio do tipo `TEXT`, permitindo índices únicos e `ON CONFLICT` textuais.
+- **Colunas Técnicas Padronizadas:**
+  - `_row_hash TEXT`: Hash MD5 do conteúdo completo da linha.
+  - `_synced_at TIMESTAMPTZ DEFAULT NOW()`: Registro de data/hora da sincronização.
+  - `created_at TIMESTAMPTZ DEFAULT NOW()`: Data de inserção do registro local.
+
+### SyncQueueManager (`backend/src/services/sync-queue.manager.ts`)
+Sistema de fila em memória com padrão Singleton que gerencia a execução de sincronizações:
+- **Controle Estrito de Concorrência:** Limita a execução concorrente de tabelas (`concurrency = 1` por padrão) para proteger a CPU, memória RAM e limites de conexões do PostgreSQL e gateway do Sankhya.
+- **Enfileiramento Inteligente:** Previne duplicação de jobs pendentes para a mesma tabela.
+- **Tratamento de Falhas:** Notifica eventos de início, sucesso e erro, atualizando o status da configuração com detalhes da execução.
 
 ### ErpSyncScheduler (`backend/src/services/erp-sync.scheduler.ts`)
 Serviço de agendamento autônomo baseado em intervalos que roda em segundo plano:
-- **Ciclo de Verificação:** Executa a cada 30 segundos.
+- **Ciclo de Verificação:** Executa a cada 30 segundos, verificando se há integrações ativas elegíveis para execução e as envia para o `SyncQueueManager`.
 - **Frequências Suportadas:**
   1. `MINUTES`: Intervalo em minutos (ex: a cada 15 min).
   2. `HOURS`: Intervalo em horas (ex: a cada 1 hora).
@@ -276,7 +305,7 @@ model AiConfiguration {
   @@map("ai_configurations")
 }
 
-// Configurações de integração SQL com o Sankhya e Agendamento
+// Configurações de integração SQL com o Sankhya, Estratégia de Sync e Agendamento
 model ErpConfiguration {
   id              String    @id @default(uuid())
   context         String
@@ -285,14 +314,23 @@ model ErpConfiguration {
   expectedFields  String[]
   tableName       String
   primaryKey      String?
-  syncFrequency   String    @default("HOURS")
+
+  // Estratégia de sincronização e paginação (FULL ou HASH_COMPARATOR)
+  syncStrategy    String    @default("FULL") // FULL ou HASH_COMPARATOR
+  lastSyncCursor  String?
+  batchSize       Int       @default(1000)
+  activeColumn    String?
+  activeValue     String?
+
+  // Agendamento da atualização automática
+  syncFrequency   String    @default("HOURS") // MINUTES, HOURS, DAILY, MONTHLY, MANUAL
   syncInterval    Int?      @default(1)
   syncTime        String?   @default("08:00")
   syncDayOfMonth  Int?      @default(1)
   syncActive      Boolean   @default(true)
   lastSyncAt      DateTime?
   nextSyncAt      DateTime?
-  lastSyncStatus  String?
+  lastSyncStatus  String?   // SUCCESS, ERROR, RUNNING
   lastSyncMessage String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
