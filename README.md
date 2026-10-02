@@ -11,10 +11,8 @@ A solução permite que gestores, diretores e gerentes comerciais consultem dado
 1. [Visão Geral e Proposta de Valor](#1-visão-geral-e-proposta-de-valor)
 2. [Arquitetura Geral do Sistema](#2-arquitetura-geral-do-sistema)
 3. [Pipeline RAG com Expansão de Contexto & Text-to-SQL](#3-pipeline-rag-com-expansão-de-contexto--text-to-sql)
-   - [3.1. Inteligência Cronológica de Datas & Conversão Numérica](#31-inteligência-cronológica-de-datas--conversão-numérica)
 4. [Dicionário de Dados Dinâmico & Multi-tenant](#4-dicionário-de-dados-dinâmico--multi-tenant)
 5. [Mecanismo Dinâmico de Tabelas & Agendador ERP](#5-mecanismo-dinâmico-de-tabelas--agendador-erp)
-   - [5.1. Deduplicação em Massa & Resiliência a Conflitos (PostgreSQL 21000)](#51-deduplicação-em-massa--resiliência-a-conflitos-postgresql-21000)
 6. [Módulo de Segurança, Autenticação & RBAC](#6-módulo-de-segurança-autenticação--rbac)
 7. [Referência Completa de Endpoints da API](#7-referência-completa-de-endpoints-da-api)
 8. [Modelagem de Dados (Prisma & PostgreSQL)](#8-modelagem-de-dados-prisma--postgresql)
@@ -132,24 +130,7 @@ Quando o usuário envia uma mensagem no chat, o pipeline executa o seguinte flux
 - [`BuildSqlGenerationPromptUseCase`](file:///d:/Projetos/Gideon/backend/src/modules/data-dictionary/application/use-cases/build-sql-generation-prompt.use-case.ts): Monta o esquema DDL simplificado informando expressamente quais colunas são PKs e FKs.
 - [`ChatRagService`](file:///d:/Projetos/Gideon/backend/src/services/chat-rag.service.ts): Orquestrador do Text-to-SQL que solicita a query ao Gemini, inspeciona e valida segurança contra SQL Injection / mutações destrutivas e executa no banco de dados.
 
-### 3.1. Inteligência Cronológica de Datas & Conversão Numérica
 
-Tabelas dinâmicas do ERP frequentemente armazenam colunas de datas ou valores em formato `TEXT` (como `data_emissao` no formato `'DDMMYYYY HH24:MI:SS'`, ex: `'02092026 00:00:00'`).
-
-- **Prevenção de Falhas de Ordenação Alfabética:**
-  - Em campos de texto, uma consulta direta como `ORDER BY data_emissao ASC` ou `MIN(data_emissao)` causa erros semânticos graves, pois alfabeticamente `'01102026'` (01 de Outubro) precede `'02092026'` (02 de Setembro).
-  - O pipeline RAG injeta guardrails estritos nas `customInstructions` do LLM e nos metadados de colunas, forçando a conversão explícita:
-    ```sql
-    -- Ordenação cronológica precisa e busca da data mais antiga / recente:
-    ORDER BY TO_TIMESTAMP(data_emissao, 'DDMMYYYY HH24:MI:SS') ASC LIMIT 1;
-    ```
-- **Filtros Temporais Inteligentes:**
-  - Consultas para datas pontuais (ex: 02/09/2026) são instruídas para utilizar `data_emissao LIKE '02092026%'` ou `TO_DATE(SUBSTRING(data_emissao, 1, 8), 'DDMMYYYY') = '2026-09-02'`.
-  - Consultas para intervalos de meses utilizam `TO_TIMESTAMP(...) BETWEEN ...`.
-- **Casting Numérico Obrigatório:**
-  - Valores monetários (`valor_bruto`, `valor_liquido`) e quantitativos (`quantidade`, `peso`) armazenados como texto recebem obrigatoriamente `CAST(coluna AS NUMERIC)` para agregações (`SUM`, `AVG`, `MAX`).
-
----
 
 ## 4. Dicionário de Dados Dinâmico & Multi-tenant
 
@@ -193,12 +174,7 @@ Responsável pelo ciclo de vida físico das tabelas dinâmicas no PostgreSQL, co
   - `_row_hash TEXT`: Hash MD5 do conteúdo completo da linha.
   - `_synced_at TIMESTAMPTZ DEFAULT NOW()`: Registro de data/hora da sincronização.
   - `created_at TIMESTAMPTZ DEFAULT NOW()`: Data de inserção do registro local.
-
-### 5.1. Deduplicação em Massa & Resiliência a Conflitos (PostgreSQL 21000)
-Quando a consulta do ERP retorna múltiplas linhas com a mesma chave primária dentro do mesmo bloco (ex: repetição de PK em sub-lotes), o PostgreSQL rejeita a instrução gerando o erro `21000 (ON CONFLICT DO UPDATE command cannot affect row a second time)`.
-- **Deduplicação Pré-Upsert:** O `DynamicTableManager` processa cada sub-lote antes da montagem da query SQL, utilizando um `Map<string, Row>` indexado pela Chave Primária normalizada.
-- Apenas a ocorrência mais recente da PK dentro do sub-lote é submetida ao comando `INSERT ... ON CONFLICT`, eliminando conflitos de concorrência e garantindo 100% de integridade transacional.
-
+  
 ### SyncQueueManager (`backend/src/services/sync-queue.manager.ts`)
 Sistema de fila em memória com padrão Singleton que gerencia a execução de sincronizações:
 - **Controle Estrito de Concorrência:** Limita a execução concorrente de tabelas (`concurrency = 1` por padrão) para proteger a CPU, memória RAM e limites de conexões do PostgreSQL e gateway do Sankhya.
