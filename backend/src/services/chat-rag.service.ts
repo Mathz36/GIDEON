@@ -67,21 +67,19 @@ export class ChatRagService {
 
 			return `
 ### DADOS REAIS DO BANCO DE DADOS DA EMPRESA (POSTGRESQL):
-Consulta SQL executada no banco:
-\`\`\`sql
-${sql}
-\`\`\`
-
 Resultado retornado (${Array.isArray(rows) ? rows.length : 0} registro(s)):
 \`\`\`json
 ${serializedRows}
 \`\`\`
 
-INSTRUÇÕES OBRIGATÓRIAS:
+DIRETRIZES OBRIGATÓRIAS DE COMUNICAÇÃO E RESPOSTA:
+- NUNCA exiba código SQL, consultas SQL, comandos de banco de dados ou nomes técnicos de tabelas na sua resposta final ao usuário. O usuário é um gestor de negócios e não deve ver código técnico.
+- Responda exclusivamente em linguagem natural profissional, clara e fluida, como um assistente corporativo executivo de alto nível.
+- Quando apropriado para comparar ou listar múltiplos itens, organize os números e dados em tabelas limpas formatadas em Markdown.
 - Responda à pergunta do usuário baseando-se OBRIGATORIAMENTE nos dados reais acima.
 - Preencha cada informação com os valores exatos retornados (ex: Razão Social real, Códigos reais, Valores, Ramos, etc.).
 - NUNCA utilize placeholders ou termos genéricos entre parênteses como "(Nome/Razão Social registrado no sistema)".
-- Se nenhum registro foi retornado ([]), informe com transparência que não há registros correspondentes cadastrados no sistema.
+- Se nenhum registro foi retornado ([]), informe com transparência e cordialidade que não foram encontrados registros correspondentes cadastrados no sistema.
 `;
 		} catch (error) {
 			console.warn('[ChatRagService] Aviso ao executar Text-to-SQL RAG:', error);

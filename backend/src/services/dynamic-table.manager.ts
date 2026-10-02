@@ -551,6 +551,8 @@ export class DynamicTableManager implements IDynamicTableManager {
 
 		const safeTableName = this.generateTableName(tableName);
 		const sanitizedPk = this.sanitizeColumnName(primaryKey);
+		const sampleRow = rows[0];
+		const pkKey = this.findMatchingFieldKey(sampleRow, primaryKey) ?? primaryKey;
 
 		// Separa colunas de negócio das colunas técnicas para evitar duplicação ou descompasso
 		const technicalCols = new Set(['_id', '_row_hash', 'row_hash', '_synced_at', 'synced_at', 'created_at']);
@@ -578,7 +580,21 @@ export class DynamicTableManager implements IDynamicTableManager {
 		let totalUpserted = 0;
 
 		for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
-			const chunk = rows.slice(i, i + CHUNK_SIZE);
+			const rawChunk = rows.slice(i, i + CHUNK_SIZE);
+
+			// Deduplica linhas pelo valor da chave primária dentro do chunk para evitar o erro PostgreSQL 21000:
+			// "ON CONFLICT DO UPDATE command cannot affect row a second time"
+			const deduplicatedMap = new Map<string, Record<string, unknown>>();
+			for (const r of rawChunk) {
+				const pkVal = String(r[pkKey] ?? '').trim();
+				if (pkVal) {
+					deduplicatedMap.set(pkVal, r);
+				}
+			}
+			const chunk = Array.from(deduplicatedMap.values());
+			deduplicatedMap.clear();
+
+			if (chunk.length === 0) continue;
 
 			const valuesLines = chunk.map((row) => {
 				const values = businessFields.map((f) => this.escapeSqlLiteral(row[f]));
@@ -599,6 +615,7 @@ export class DynamicTableManager implements IDynamicTableManager {
 			await this.prisma.$executeRawUnsafe(sql);
 			totalUpserted += chunk.length;
 			chunk.length = 0;
+			rawChunk.length = 0;
 		}
 
 		return totalUpserted;
