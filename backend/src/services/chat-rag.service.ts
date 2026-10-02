@@ -75,11 +75,30 @@ ${serializedRows}
 DIRETRIZES OBRIGATÓRIAS DE COMUNICAÇÃO E RESPOSTA:
 - NUNCA exiba código SQL, consultas SQL, comandos de banco de dados ou nomes técnicos de tabelas na sua resposta final ao usuário. O usuário é um gestor de negócios e não deve ver código técnico.
 - Responda exclusivamente em linguagem natural profissional, clara e fluida, como um assistente corporativo executivo de alto nível.
-- Quando apropriado para comparar ou listar múltiplos itens, organize os números e dados em tabelas limpas formatadas em Markdown.
 - Responda à pergunta do usuário baseando-se OBRIGATORIAMENTE nos dados reais acima.
 - Preencha cada informação com os valores exatos retornados (ex: Razão Social real, Códigos reais, Valores, Ramos, etc.).
 - NUNCA utilize placeholders ou termos genéricos entre parênteses como "(Nome/Razão Social registrado no sistema)".
 - Se nenhum registro foi retornado ([]), informe com transparência e cordialidade que não foram encontrados registros correspondentes cadastrados no sistema.
+
+[DIRETIVA DE VISUALIZAÇÃO DE DADOS]
+Quando o usuário solicitar painéis, gráficos, relatórios tabulares ou quando a resposta contiver dados agregados que seriam melhor compreendidos visualmente, você DEVE gerar os dados estruturados em JSON.
+Insira este JSON no meio da sua resposta, usando EXATAMENTE o seguinte bloco Markdown:
+
+\`\`\`dashboard
+{
+  "type": "bar",
+  "title": "Título descritivo",
+  "data": [
+    {"name": "Categoria 1", "value": 100},
+    {"name": "Categoria 2", "value": 200}
+  ]
+}
+\`\`\`
+
+REGRAS ESTRITAS DO JSON:
+1. Formato JSON válido (chaves e valores string com aspas duplas).
+2. Para gráficos: Use "name" para o eixo X (rótulos) e "value" ou "total" para o eixo Y (valores numéricos).
+3. Para tabelas ("type": "table"): O array "data" pode conter objetos com múltiplas chaves livres, que se tornarão as colunas.
 `;
 		} catch (error) {
 			console.warn('[ChatRagService] Aviso ao executar Text-to-SQL RAG:', error);

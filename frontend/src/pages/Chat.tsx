@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { DynamicDashboard } from '../components/chat/DynamicDashboard';
 
 import { useChat } from '../hooks/useChat';
 
@@ -48,8 +49,47 @@ export default function Chat() {
 								: 'max-w-[85%] rounded-2xl rounded-tl-sm border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-800 shadow-sm'}
 							>
 								{message.role === 'assistant' ? (
-									message.content ? <ReactMarkdown>{message.content}</ReactMarkdown> : <span className="animate-pulse text-slate-400">Pensando...</span>
-								) : message.content}
+									message.content ? (
+										<ReactMarkdown
+											components={{
+												code({ node, inline, className, children, ...props }: any) {
+													const match = /language-(\w+)/.exec(className || '');
+													const language = match ? match[1] : '';
+
+													// Intercepta a UI Generativa (Dashboard)
+													if (!inline && language === 'dashboard') {
+														return <DynamicDashboard configString={String(children)} />;
+													}
+
+													// Renderiza blocos de código normais (SQL, JSON puro, etc)
+													return !inline && match ? (
+														<div className="my-3 overflow-hidden rounded-xl border border-slate-700">
+															<div className="bg-slate-800 px-3 py-1 font-mono text-xs uppercase tracking-wider text-slate-400">
+																{language}
+															</div>
+															<pre className="overflow-x-auto bg-slate-900 p-3 text-xs text-slate-100">
+																<code className={className} {...props}>
+																	{children}
+																</code>
+															</pre>
+														</div>
+													) : (
+														// Código inline
+														<code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-pink-600" {...props}>
+															{children}
+														</code>
+													);
+												},
+											}}
+										>
+											{message.content}
+										</ReactMarkdown>
+									) : (
+										<span className="animate-pulse text-slate-400">Pensando...</span>
+									)
+								) : (
+									message.content
+								)}
 							</div>
 						</div>
 					))}
