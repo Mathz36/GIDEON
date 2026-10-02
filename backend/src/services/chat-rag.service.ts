@@ -19,11 +19,23 @@ export class ChatRagService {
 		}
 
 		try {
-			// 1. Executa o pipeline RAG (Keywords -> Busca -> Expansão de FKs -> DDL)
 			const pipelineResult = await ragSqlPipeline.execute({
 				tenantId: 'default',
 				question: userQuestion,
 				maxInitialTables: 4,
+				customInstructions: `DIRETRIZES CRÍTICAS DE CONVERSÃO E TIPAGEM DE DADOS:
+1. TRATAMENTO DA COLUNA "DATA_EMISSAO" (Tabela erp_nota_fiscal):
+   - Esta coluna é do tipo TEXT e armazena datas no formato 'DDMMYYYY HH24:MI:SS' (exemplo: '02092026 00:00:00' para 02 de setembro de 2026).
+   - NUNCA use MIN(data_emissao), MAX(data_emissao) ou ORDER BY data_emissao diretamente como texto, pois a ordenação alfabética falha (ex: '01102026' vem antes de '02092026').
+   - Para ordenar por data ou encontrar a mais antiga/recente, converta OBRIGATORIAMENTE com:
+     TO_TIMESTAMP(data_emissao, 'DDMMYYYY HH24:MI:SS')
+     Exemplo para mais antiga: ORDER BY TO_TIMESTAMP(data_emissao, 'DDMMYYYY HH24:MI:SS') ASC LIMIT 1
+     Exemplo para mais recente: ORDER BY TO_TIMESTAMP(data_emissao, 'DDMMYYYY HH24:MI:SS') DESC LIMIT 1
+   - Para filtrar datas específicas:
+     * Para um dia específico (ex: 02/09/2026): use data_emissao LIKE '02092026%' ou TO_DATE(SUBSTRING(data_emissao, 1, 8), 'DDMMYYYY') = '2026-09-02'
+     * Para um mês específico (ex: setembro/2026): use data_emissao LIKE '__092026%' ou TO_TIMESTAMP(data_emissao, 'DDMMYYYY HH24:MI:SS') BETWEEN '2026-09-01' AND '2026-09-30 23:59:59'
+2. TRATAMENTO DE VALORES NUMÉRICOS:
+   - Colunas numéricas armazenadas como TEXT (ex: valor_bruto, valor_liquido, quantidade, peso) DEVEM receber CAST(coluna AS NUMERIC) ao usar SUM, AVG ou comparações numéricas (> ou <).`,
 			});
 
 			if (pipelineResult.schemaGraph.allTables.length === 0) {

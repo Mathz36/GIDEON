@@ -122,9 +122,7 @@ export class ErpConfigurationService implements IErpConfigurationService {
 					columns: created.expectedFields.map((field) => ({
 						columnName: field,
 						dataType: 'TEXT',
-						description: field.toUpperCase() === primaryKey.toUpperCase()
-							? `Chave Primária identificadora (${field})`
-							: `Coluna de dados ${field} da integração ${input.context}`,
+						description: this.generateColumnDescription(field, primaryKey, input.context),
 						isPrimaryKey: field.toUpperCase() === primaryKey.toUpperCase(),
 					})),
 				});
@@ -199,9 +197,7 @@ export class ErpConfigurationService implements IErpConfigurationService {
 					columns: updated.expectedFields.map((field) => ({
 						columnName: field,
 						dataType: 'TEXT',
-						description: field.toUpperCase() === primaryKey.toUpperCase()
-							? `Chave Primária identificadora (${field})`
-							: `Coluna de dados ${field} da integração ${input.context}`,
+						description: this.generateColumnDescription(field, primaryKey, input.context),
 						isPrimaryKey: field.toUpperCase() === primaryKey.toUpperCase(),
 					})),
 				});
@@ -211,6 +207,23 @@ export class ErpConfigurationService implements IErpConfigurationService {
 		}
 
 		return updated;
+	}
+
+	private generateColumnDescription(field: string, primaryKey: string | null, context: string): string {
+		const upper = field.toUpperCase();
+		if (primaryKey && upper === primaryKey.toUpperCase()) {
+			return `Chave Primária identificadora (${field})`;
+		}
+		if (upper.includes('DATA') || upper.startsWith('DT_')) {
+			return `Data e hora gravada como texto no formato 'DDMMYYYY HH24:MI:SS' (ex: '02092026 00:00:00'). Para ordenar, filtrar intervalos ou obter MIN/MAX, use OBRIGATORIAMENTE TO_TIMESTAMP(${field}, 'DDMMYYYY HH24:MI:SS').`;
+		}
+		if (upper.startsWith('VALOR_') || upper.startsWith('VLR_')) {
+			return `Valor monetário da integração ${context} (armazenado como texto numérico). Para somas e cálculos matemáticos, use CAST(${field} AS NUMERIC).`;
+		}
+		if (upper === 'QUANTIDADE' || upper === 'QTD' || upper === 'PESO') {
+			return `Quantidade ou medida numérica da integração ${context}. Para somas e agregações, use CAST(${field} AS NUMERIC).`;
+		}
+		return `Coluna de dados ${field} da integração ${context}`;
 	}
 
 	async delete(id: string): Promise<boolean> {
