@@ -215,7 +215,7 @@ export class ErpConfigurationService implements IErpConfigurationService {
 			return `Chave Primária identificadora (${field})`;
 		}
 		if (upper.includes('DATA') || upper.startsWith('DT_')) {
-			return `Data e hora gravada como texto no formato 'DDMMYYYY HH24:MI:SS' (ex: '02092026 00:00:00'). Para ordenar, filtrar intervalos ou obter MIN/MAX, use OBRIGATORIAMENTE TO_TIMESTAMP(${field}, 'DDMMYYYY HH24:MI:SS').`;
+			return `Data e hora gravada como texto no formato ISO 'YYYY-MM-DD HH24:MI:SS' (ex: '2026-09-02 00:00:00'). NUNCA use o formato 'DDMMYYYY'. Para ordenar, filtrar intervalos, comparar com CURRENT_DATE/DATE_TRUNC ou obter MIN/MAX, use OBRIGATORIAMENTE CAST(${field} AS TIMESTAMP) ou CAST(${field} AS DATE).`;
 		}
 		if (upper.startsWith('VALOR_') || upper.startsWith('VLR_')) {
 			return `Valor monetário da integração ${context} (armazenado como texto numérico). Para somas e cálculos matemáticos, use CAST(${field} AS NUMERIC).`;

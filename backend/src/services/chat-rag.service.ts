@@ -24,16 +24,19 @@ export class ChatRagService {
 				question: userQuestion,
 				maxInitialTables: 4,
 				customInstructions: `DIRETRIZES CRÍTICAS DE CONVERSÃO E TIPAGEM DE DADOS:
-1. TRATAMENTO DA COLUNA "DATA_EMISSAO" (Tabela erp_nota_fiscal):
-   - Esta coluna é do tipo TEXT e armazena datas no formato 'DDMMYYYY HH24:MI:SS' (exemplo: '02092026 00:00:00' para 02 de setembro de 2026).
-   - NUNCA use MIN(data_emissao), MAX(data_emissao) ou ORDER BY data_emissao diretamente como texto, pois a ordenação alfabética falha (ex: '01102026' vem antes de '02092026').
-   - Para ordenar por data ou encontrar a mais antiga/recente, converta OBRIGATORIAMENTE com:
-     TO_TIMESTAMP(data_emissao, 'DDMMYYYY HH24:MI:SS')
-     Exemplo para mais antiga: ORDER BY TO_TIMESTAMP(data_emissao, 'DDMMYYYY HH24:MI:SS') ASC LIMIT 1
-     Exemplo para mais recente: ORDER BY TO_TIMESTAMP(data_emissao, 'DDMMYYYY HH24:MI:SS') DESC LIMIT 1
-   - Para filtrar datas específicas:
-     * Para um dia específico (ex: 02/09/2026): use data_emissao LIKE '02092026%' ou TO_DATE(SUBSTRING(data_emissao, 1, 8), 'DDMMYYYY') = '2026-09-02'
-     * Para um mês específico (ex: setembro/2026): use data_emissao LIKE '__092026%' ou TO_TIMESTAMP(data_emissao, 'DDMMYYYY HH24:MI:SS') BETWEEN '2026-09-01' AND '2026-09-30 23:59:59'
+1. COLUNAS DE DATA (ex: "data_emissao" e qualquer coluna descrita como data/hora):
+   - São do tipo TEXT e armazenam datas no formato ISO 'YYYY-MM-DD HH24:MI:SS' (exemplo: '2026-09-02 00:00:00' para 02 de setembro de 2026).
+   - NUNCA use os formatos 'DDMMYYYY' ou 'DD/MM/YYYY' para ler essas colunas (gera erro 22008 "date/time field value out of range").
+   - Aplique conversão de data SOMENTE em colunas cuja descrição indique data/hora. NUNCA converta para data colunas de código, número ou identificador (ex: nota_fiscal, id, cod_*, pedido_origem). Se nenhuma tabela do esquema possuir coluna de data, NÃO invente filtro de data.
+   - Para comparar com datas, intervalos, CURRENT_DATE, NOW(), DATE_TRUNC ou INTERVAL, converta OBRIGATORIAMENTE com:
+     CAST(coluna AS TIMESTAMP)   -- ou TO_TIMESTAMP(coluna, 'YYYY-MM-DD HH24:MI:SS')
+   - Exemplos:
+     * Mais antiga: ORDER BY CAST(data_emissao AS TIMESTAMP) ASC LIMIT 1
+     * Mais recente: ORDER BY CAST(data_emissao AS TIMESTAMP) DESC LIMIT 1
+     * Dia específico (02/09/2026): CAST(data_emissao AS DATE) = DATE '2026-09-02'
+     * Mês específico (setembro/2026): CAST(data_emissao AS TIMESTAMP) >= DATE '2026-09-01' AND CAST(data_emissao AS TIMESTAMP) < DATE '2026-10-01'
+     * Mês anterior: CAST(data_emissao AS TIMESTAMP) >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') AND CAST(data_emissao AS TIMESTAMP) < DATE_TRUNC('month', CURRENT_DATE)
+     * Agrupar por mês: TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'YYYY-MM')
 2. TRATAMENTO DE VALORES NUMÉRICOS:
    - Colunas numéricas armazenadas como TEXT (ex: valor_bruto, valor_liquido, quantidade, peso) DEVEM receber CAST(coluna AS NUMERIC) ao usar SUM, AVG ou comparações numéricas (> ou <).`,
 			});
