@@ -418,8 +418,8 @@ Crie um arquivo `.env` na pasta `backend/` com as seguintes chaves:
 
 ```env
 # Servidor
-PORT=3001
-CORS_ORIGIN=http://localhost:3000
+PORT=3080
+CORS_ORIGIN=http://localhost:3090
 
 # Google Gemini API
 GEMINI_API_KEY=sua_chave_do_google_ai_studio

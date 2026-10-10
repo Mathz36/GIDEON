@@ -8,7 +8,7 @@ import erpSyncScheduler from './services/erp-sync.scheduler';
 import authService from './services/auth.service';
 
 const app = express();
-const port = Number(process.env.PORT ?? 3001);
+const port = Number(process.env.PORT ?? 3080);
 
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
 	throw new Error('PORT deve ser um numero inteiro entre 1 e 65535.');
@@ -16,7 +16,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65_535) {
 
 app.use(
 	cors({
-		origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+		origin: process.env.CORS_ORIGIN ?? 'http://localhost:3090',
 	}),
 );
 app.use(express.json({ limit: '1mb' }));
