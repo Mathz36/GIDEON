@@ -47,59 +47,69 @@ interface SankhyaResponse {
 export class SankhyaService {
 	private readonly config: SankhyaConfig;
 	private static tokenCache: SankhyaTokenCache | null = null;
+	private static tokenRefreshPromise: Promise<string> | null = null;
+
+	private static readonly MAX_RETRIES = 3;
+	private static readonly BASE_BACKOFF_MS = 300;
+	private static readonly MAX_BACKOFF_MS = 4_000;
+	private static readonly RETRYABLE_HTTP_STATUS = new Set([429, 502, 503, 504]);
+	private static readonly RETRYABLE_ERROR_CODES = new Set([
+		'ECONNRESET',
+		'ETIMEDOUT',
+		'ECONNABORTED',
+		'ENOTFOUND',
+		'EAI_AGAIN',
+		'EPIPE',
+		'SOCKET_HANG_UP',
+	]);
 
 	constructor(config: SankhyaConfig = SankhyaService.getConfigFromEnvironment()) {
 		this.config = config;
 	}
 
 	/**
-	 * Obtém ou renova o token Bearer via OAuth2 (Client Credentials) ou variáveis de ambiente.
+	 * Invalida explicitamente o cache de token em memória.
 	 */
-	private async getAccessToken(): Promise<string> {
+	public static invalidateTokenCache(): void {
+		SankhyaService.tokenCache = null;
+	}
+
+	/**
+	 * Obtém ou renova o token Bearer via OAuth2 (Client Credentials) com padrão Single-Flight (Promise Lock):
+	 * se múltiplas chamadas concorrentes detectarem que o token expirou, apenas 1 requisição HTTP de renovação
+	 * é disparada à API do Sankhya, e todas as demais aguardam a mesma Promise em voo.
+	 */
+	private async getAccessToken(forceRefresh: boolean = false): Promise<string> {
 		if (this.config.apiToken) {
 			return this.config.apiToken;
 		}
 
+		if (forceRefresh) {
+			SankhyaService.tokenCache = null;
+		}
+
 		const now = Date.now();
-		if (SankhyaService.tokenCache && SankhyaService.tokenCache.expiresAt > now + 30_000) {
+		if (
+			!forceRefresh &&
+			SankhyaService.tokenCache &&
+			SankhyaService.tokenCache.expiresAt > now + 30_000
+		) {
 			return SankhyaService.tokenCache.accessToken;
 		}
 
+		if (SankhyaService.tokenRefreshPromise) {
+			return SankhyaService.tokenRefreshPromise;
+		}
+
 		if (this.config.apiUrl && this.config.clientId && this.config.clientSecret) {
-			try {
-				const params = new URLSearchParams();
-				params.append('grant_type', this.config.grantType ?? 'client_credentials');
-				params.append('client_id', this.config.clientId);
-				params.append('client_secret', this.config.clientSecret);
-
-				const response = await axios.post<{ access_token: string; expires_in?: number }>(
-					this.config.apiUrl,
-					params.toString(),
-					{
-						timeout: 15_000,
-						headers: {
-							'Content-Type': 'application/x-www-form-urlencoded',
-							...(this.config.xToken ? { 'X-Token': this.config.xToken } : {}),
-						},
-					},
-				);
-
-				const token = response.data.access_token;
-				if (!token) {
-					throw new Error('O serviço de autenticação do Sankhya não retornou access_token.');
+			const refreshTask = this.requestOAuthTokenWithRetry().finally(() => {
+				if (SankhyaService.tokenRefreshPromise === refreshTask) {
+					SankhyaService.tokenRefreshPromise = null;
 				}
+			});
 
-				const expiresInSeconds = response.data.expires_in ?? 300;
-				SankhyaService.tokenCache = {
-					accessToken: token,
-					expiresAt: now + expiresInSeconds * 1000,
-				};
-
-				return token;
-			} catch (error) {
-				const details = SankhyaService.getErrorDetails(axios.isAxiosError(error) ? error.response?.data : error);
-				throw new Error(`Falha na autenticação OAuth com Sankhya: ${details}`, { cause: error });
-			}
+			SankhyaService.tokenRefreshPromise = refreshTask;
+			return refreshTask;
 		}
 
 		if (this.config.sessionSecret) {
@@ -110,7 +120,69 @@ export class SankhyaService {
 	}
 
 	/**
+	 * Realiza a chamada OAuth2 com retry exponencial + jitter para falhas transitórias de rede.
+	 */
+	private async requestOAuthTokenWithRetry(): Promise<string> {
+		const apiUrl = this.config.apiUrl!;
+		const params = new URLSearchParams();
+		params.append('grant_type', this.config.grantType ?? 'client_credentials');
+		params.append('client_id', this.config.clientId!);
+		params.append('client_secret', this.config.clientSecret!);
+
+		let attempt = 0;
+
+		while (true) {
+			try {
+				const requestTime = Date.now();
+				const response = await axios.post<{ access_token: string; expires_in?: number }>(
+					apiUrl,
+					params.toString(),
+					{
+						timeout: 15_000,
+						headers: {
+							'Content-Type': 'application/x-www-form-urlencoded',
+							...(this.config.xToken ? { 'X-Token': this.config.xToken } : {}),
+						},
+					},
+				);
+
+				const token = response.data?.access_token;
+				if (!token) {
+					throw new Error('O serviço de autenticação do Sankhya não retornou access_token.');
+				}
+
+				const expiresInSeconds = Number(response.data?.expires_in) || 300;
+				SankhyaService.tokenCache = {
+					accessToken: token,
+					expiresAt: requestTime + expiresInSeconds * 1000,
+				};
+
+				return token;
+			} catch (error: unknown) {
+				if (attempt < SankhyaService.MAX_RETRIES && SankhyaService.isTransientError(error)) {
+					attempt += 1;
+					const delayMs = SankhyaService.calculateBackoffWithJitter(attempt);
+					console.warn(
+						`[SankhyaService] Falha transitória na autenticação OAuth (tentativa ${attempt}/${SankhyaService.MAX_RETRIES}). Retentando em ${delayMs}ms...`,
+					);
+					await SankhyaService.sleep(delayMs);
+					continue;
+				}
+
+				const rawDetails = SankhyaService.getErrorDetails(
+					axios.isAxiosError(error) ? error.response?.data : error,
+				);
+				const safeDetails = this.sanitizeSensitiveData(rawDetails);
+				throw new Error(`Falha na autenticação OAuth com Sankhya: ${safeDetails}`);
+			}
+		}
+	}
+
+	/**
 	 * Executa uma consulta SQL no DbExplorer do Sankhya e formata os dados para as colunas esperadas.
+	 * Conta com:
+	 * - Reconexão automática em caso de 401 Unauthorized (invalida o token e renova uma única vez via Single-Flight).
+	 * - Retry automático com Exponential Backoff + Jitter para erros transitórios (429, 502, 503, 504, ECONNRESET, ETIMEDOUT).
 	 */
 	async executeQuery(query: string, expectedFields: string[]): Promise<SankhyaRow[]> {
 		const normalizedQuery = query.trim();
@@ -124,42 +196,143 @@ export class SankhyaService {
 			throw new Error('Informe ao menos um campo esperado para a consulta do Sankhya.');
 		}
 
-		const token = await this.getAccessToken();
+		let token = await this.getAccessToken(false);
+		let hasRetriedAuth = false;
+		let transientAttempt = 0;
 
-		try {
-			const response = await axios.post<unknown>(
-				this.config.dbExplorerUrl,
-				{
-					requestBody: {
-						sql: normalizedQuery,
+		while (true) {
+			try {
+				const response = await axios.post<unknown>(
+					this.config.dbExplorerUrl,
+					{
+						requestBody: {
+							sql: normalizedQuery,
+						},
 					},
-				},
-				{
-					timeout: 30_000,
-					headers: {
-						Accept: 'application/json',
-						'Content-Type': 'application/json',
-						Authorization: `Bearer ${token}`,
-						...(this.config.xToken ? { 'X-Token': this.config.xToken } : {}),
+					{
+						timeout: 30_000,
+						headers: {
+							Accept: 'application/json',
+							'Content-Type': 'application/json',
+							Authorization: `Bearer ${token}`,
+							...(this.config.xToken ? { 'X-Token': this.config.xToken } : {}),
+						},
 					},
-				},
-			);
+				);
 
-			return SankhyaService.mapResponse(response.data, fields);
-		} catch (error: unknown) {
-			if (error instanceof Error && !axios.isAxiosError(error)) {
-				throw error;
+				return SankhyaService.mapResponse(response.data, fields);
+			} catch (error: unknown) {
+				if (error instanceof Error && !axios.isAxiosError(error)) {
+					throw new Error(this.sanitizeSensitiveData(error.message));
+				}
+
+				const axiosError = error as AxiosError<unknown>;
+				const status = axiosError.response?.status;
+
+				// Reconexão automática em 401 Unauthorized (apenas 1 vez por chamada)
+				if (status === 401 && !hasRetriedAuth && !this.config.apiToken) {
+					hasRetriedAuth = true;
+					console.warn(
+						'[SankhyaService] Recebido HTTP 401 Unauthorized do Sankhya. Invalidando token em cache e renovando sessão (Single-Flight)...',
+					);
+					token = await this.getAccessToken(true);
+					continue;
+				}
+
+				// Retry com Exponential Backoff + Jitter para falhas transitórias de rede / rate limit / gateway
+				if (
+					transientAttempt < SankhyaService.MAX_RETRIES &&
+					SankhyaService.isTransientError(axiosError)
+				) {
+					transientAttempt += 1;
+					const delayMs = SankhyaService.calculateBackoffWithJitter(transientAttempt);
+					console.warn(
+						`[SankhyaService] Falha transitória na consulta ao DbExplorer (${status ? `HTTP ${status}` : axiosError.code ?? 'Network Error'}). Tentativa ${transientAttempt}/${SankhyaService.MAX_RETRIES} em ${delayMs}ms...`,
+					);
+					await SankhyaService.sleep(delayMs);
+					continue;
+				}
+
+				const rawDetails = SankhyaService.getErrorDetails(axiosError.response?.data);
+				const safeDetails = this.sanitizeSensitiveData(rawDetails);
+				const suffix = status ? ` (HTTP ${status})` : '';
+
+				throw new Error(`Falha na requisicao ao dbexplorer da Sankhya${suffix}: ${safeDetails}`);
 			}
-
-			const axiosError = error as AxiosError<unknown>;
-			const status = axiosError.response?.status;
-			const details = SankhyaService.getErrorDetails(axiosError.response?.data);
-			const suffix = status ? ` (HTTP ${status})` : '';
-
-			throw new Error(`Falha na requisicao ao dbexplorer da Sankhya${suffix}: ${details}`, {
-				cause: error,
-			});
 		}
+	}
+
+	/**
+	 * Verifica se o erro é transitório (429, 502, 503, 504 ou falha de socket/timeout).
+	 */
+	private static isTransientError(error: unknown): boolean {
+		if (!axios.isAxiosError(error)) {
+			return false;
+		}
+
+		const status = error.response?.status;
+		if (status !== undefined && SankhyaService.RETRYABLE_HTTP_STATUS.has(status)) {
+			return true;
+		}
+
+		const code = error.code?.toUpperCase();
+		if (code && SankhyaService.RETRYABLE_ERROR_CODES.has(code)) {
+			return true;
+		}
+
+		const msg = (error.message || '').toUpperCase();
+		if (
+			msg.includes('ECONNRESET') ||
+			msg.includes('ETIMEDOUT') ||
+			msg.includes('SOCKET HANG UP') ||
+			msg.includes('TIMEOUT OF')
+		) {
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Calcula delay de Exponential Backoff com Full/Equal Jitter.
+	 */
+	private static calculateBackoffWithJitter(attempt: number): number {
+		const exponential = Math.min(
+			SankhyaService.MAX_BACKOFF_MS,
+			SankhyaService.BASE_BACKOFF_MS * Math.pow(2, attempt - 1),
+		);
+		const jitter = Math.floor(Math.random() * 150);
+		return exponential + jitter;
+	}
+
+	private static sleep(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	/**
+	 * Remove qualquer vazamento acidental de segredos (clientSecret, password, tokens) em mensagens de erro ou logs.
+	 */
+	private sanitizeSensitiveData(input: string): string {
+		if (!input) return input;
+
+		let sanitized = input.replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]');
+
+		const secretsToRedact = [
+			this.config.clientSecret,
+			this.config.password,
+			this.config.apiToken,
+			this.config.sessionSecret,
+			this.config.xToken,
+			SankhyaService.tokenCache?.accessToken,
+		];
+
+		for (const secret of secretsToRedact) {
+			if (secret && secret.trim().length >= 4) {
+				sanitized = sanitized.split(secret).join('[REDACTED]');
+			}
+		}
+
+		return sanitized;
 	}
 
 	private static getConfigFromEnvironment(): SankhyaConfig {

@@ -55,25 +55,95 @@ export class DynamicTableManager implements IDynamicTableManager {
 	}
 
 	/**
-	 * Gera Hash MD5 determinístico a partir dos valores da linha.
-	 * As chaves são ordenadas alfabeticamente para evitar falsos positivos se a ordem das colunas mudar.
-	 * Campos técnicos de auditoria (_row_hash, _synced_at, synced_at, id, created_at) são ignorados.
+	 * Normaliza valores de forma canônica para o cálculo de Hash determinístico,
+	 * prevenindo falsos positivos de sincronização entre os tipos do Sankhya (Oracle/SQL) e PostgreSQL:
+	 * - `null` e `undefined` -> representação canônica idêntica (`null`)
+	 * - `Date` -> ISO-8601 string
+	 * - `number` -> representação numérica sem zeros decimais supérfluos (ex: 10.0 -> "10")
+	 * - `string` -> quebras de linha normalizadas (\r\n -> \n), .trim() aplicado e números decimais equivalentes normalizados sem afetar códigos com zero à esquerda.
+	 */
+	private normalizeValueForHash(val: unknown): string | null {
+		if (val === null || val === undefined) {
+			return null;
+		}
+
+		if (val instanceof Date) {
+			return Number.isNaN(val.getTime()) ? null : val.toISOString();
+		}
+
+		if (typeof val === 'number') {
+			if (!Number.isFinite(val)) return null;
+			return Object.is(val, -0) ? '0' : String(val);
+		}
+
+		if (typeof val === 'boolean') {
+			return val ? 'true' : 'false';
+		}
+
+		if (typeof val === 'string') {
+			const normalizedStr = val.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+			if (normalizedStr === '') {
+				return null;
+			}
+
+			// Normaliza strings numéricas decimais equivalentes (ex: "10.0" -> "10", "10.50" -> "10.5")
+			// preservando códigos com zeros à esquerda (ex: "00123") e números longos (ex: CNPJ/chaves > 15 dígitos)
+			if (
+				normalizedStr.length <= 15 &&
+				/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(normalizedStr)
+			) {
+				const parsed = Number(normalizedStr);
+				if (Number.isFinite(parsed)) {
+					return Object.is(parsed, -0) ? '0' : String(parsed);
+				}
+			}
+
+			return normalizedStr;
+		}
+
+		return String(val).replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+	}
+
+	/**
+	 * Gera Hash MD5 100% determinístico e invariante à ordem das propriedades do objeto.
+	 * As chaves são normalizadas e ordenadas alfabeticamente (comparação lexicográfica determinística).
+	 * Campos de metadados técnicos internos (_id, _row_hash, row_hash, _synced_at, synced_at, created_at, _updated_at, updated_at) são excluídos.
 	 */
 	generateRowHash(row: Record<string, any>): string {
 		if (!row || typeof row !== 'object') return '';
 
-		const technicalFields = new Set(['_id', '_row_hash', '_synced_at', 'created_at']);
-		const sortedKeys = Object.keys(row)
-			.filter((k) => !technicalFields.has(k.toLowerCase()))
-			.sort((a, b) => a.localeCompare(b));
+		const technicalFields = new Set([
+			'_id',
+			'_row_hash',
+			'row_hash',
+			'_synced_at',
+			'synced_at',
+			'created_at',
+			'_updated_at',
+			'updated_at',
+		]);
 
-		const parts = sortedKeys.map((k) => {
-			const val = row[k];
-			const serialized = val === null || val === undefined ? '' : String(val).trim();
-			return `${k.toLowerCase()}:${serialized}`;
-		});
+		const normalizedEntries = new Map<string, string | null>();
 
-		return crypto.createHash('md5').update(parts.join('|'), 'utf8').digest('hex');
+		for (const rawKey of Object.keys(row)) {
+			const cleanKey = rawKey.trim().toLowerCase();
+			if (!cleanKey || technicalFields.has(cleanKey)) {
+				continue;
+			}
+			normalizedEntries.set(cleanKey, this.normalizeValueForHash(row[rawKey]));
+		}
+
+		const sortedKeys = Array.from(normalizedEntries.keys()).sort((a, b) =>
+			a < b ? -1 : a > b ? 1 : 0,
+		);
+
+		const canonicalPayload = sortedKeys.map((k) => [k, normalizedEntries.get(k) ?? null]);
+		normalizedEntries.clear();
+
+		return crypto
+			.createHash('md5')
+			.update(JSON.stringify(canonicalPayload), 'utf8')
+			.digest('hex');
 	}
 
 	/**
@@ -189,34 +259,25 @@ export class DynamicTableManager implements IDynamicTableManager {
 				throw new Error(`Coluna PK "${config.primaryKey}" não encontrada no retorno da integração.`);
 			}
 
-			// 4. Calcula Hashes para todas as linhas recebidas (mesmo inativas, são mantidas no banco)
-			const rowsToUpsert: Record<string, unknown>[] = [];
-			const activeBatchRows: Array<{ row: Record<string, unknown>; pkVal: string; computedHash: string }> = [];
-
+			// 4. Extrai apenas as PKs válidas do lote atual sem criar objetos wrapper intermediários pesados
+			const batchPks: string[] = [];
 			for (const row of rows) {
 				const pkVal = row[pkKey];
 				if (pkVal === undefined || pkVal === null || pkVal === '') continue;
 
 				const pkStr = String(pkVal).trim();
 				seenPksInSync.add(pkStr);
-
-				// Gera Hash determinístico da linha completa (incluindo status inativo)
-				const computedHash = this.generateRowHash(row);
-				row._row_hash = computedHash;
-				activeBatchRows.push({
-					row,
-					pkVal: pkStr,
-					computedHash,
-				});
+				batchPks.push(pkStr);
 			}
 
-			// 5. Consulta os Hashes persistidos no PostgreSQL para as PKs deste lote
+			// 5. Consulta os Hashes persistidos no PostgreSQL para as PKs deste lote (armazena apenas strings leves pk -> hash)
 			const dbHashMap = new Map<string, string>();
-			if (activeBatchRows.length > 0) {
+			if (batchPks.length > 0) {
 				const PK_CHUNK = 500;
-				for (let i = 0; i < activeBatchRows.length; i += PK_CHUNK) {
-					const pkChunk = activeBatchRows.slice(i, i + PK_CHUNK);
-					const escapedPks = pkChunk.map((item) => this.escapeSqlLiteral(item.pkVal)).join(', ');
+				for (let i = 0; i < batchPks.length; i += PK_CHUNK) {
+					const pkChunk = batchPks.slice(i, i + PK_CHUNK);
+					const escapedPks = pkChunk.map((pk) => this.escapeSqlLiteral(pk)).join(', ');
+					pkChunk.length = 0;
 
 					const existingRecords = await this.prisma.$queryRawUnsafe<Array<{ pk: string; _row_hash: string | null }>>(`
 						SELECT "${sanitizedPk}"::text AS "pk", "_row_hash"
@@ -229,32 +290,40 @@ export class DynamicTableManager implements IDynamicTableManager {
 							dbHashMap.set(String(rec.pk).trim(), rec._row_hash.trim());
 						}
 					}
+					existingRecords.length = 0;
 				}
 			}
+			batchPks.length = 0;
 
-			// 6. Compara os Hashes linha a linha
-			for (const item of activeBatchRows) {
-				const existingHash = dbHashMap.get(item.pkVal);
-				if (!existingHash || existingHash !== item.computedHash) {
-					// Linha nova ou modificada: enfileira para Upsert
-					rowsToUpsert.push(item.row);
+			// 6. Calcula Hashes e compara linha a linha em passagem única, retendo apenas linhas alteradas/novas
+			const rowsToUpsert: Record<string, unknown>[] = [];
+			let skippedInBatch = 0;
+
+			for (const row of rows) {
+				const pkVal = row[pkKey];
+				if (pkVal === undefined || pkVal === null || pkVal === '') continue;
+
+				const pkStr = String(pkVal).trim();
+				const computedHash = this.generateRowHash(row);
+				const existingHash = dbHashMap.get(pkStr);
+
+				if (!existingHash || existingHash !== computedHash) {
+					row._row_hash = computedHash;
+					rowsToUpsert.push(row);
 				} else {
-					// Linha idêntica: ignora da gravação (salva CPU, rede e disco)
 					totalSkipped += 1;
+					skippedInBatch += 1;
 				}
 			}
 
-			// 7. Grava alterações em sub-lotes de 500 registros
-			if (rowsToUpsert.length > 0) {
-				const upsertedCount = await this.upsertBatch(safeTableName, config.primaryKey, rowsToUpsert);
-				totalUpserted += upsertedCount;
-			}
+			// Libera imediatamente o Map de hashes do lote antes do I/O de escrita
+			dbHashMap.clear();
 
-			// 8. Atualiza cursor ou offset
+			// 7. Captura a última PK para avanço de cursor antes de esvaziar referências do lote
 			let cursorAdvanced = false;
 			if (hasCursorMacro) {
 				const lastRow = rows[rowCount - 1];
-				const lastPkValue = lastRow[pkKey];
+				const lastPkValue = lastRow?.[pkKey];
 				if (lastPkValue !== undefined && lastPkValue !== null) {
 					const nextCursor = String(lastPkValue).trim();
 					if (nextCursor !== currentCursor) {
@@ -266,15 +335,22 @@ export class DynamicTableManager implements IDynamicTableManager {
 				offset += rowCount;
 			}
 
-			console.info(
-				`[DynamicTableManager] [Lote #${batchIndex}] Processado: ${rowCount} rows (${rowsToUpsert.length} upserts, ${activeBatchRows.length - rowsToUpsert.length} inalteradas descartadas). ${hasCursorMacro ? `Cursor: "${currentCursor}"` : `Offset: ${offset}`}`,
-			);
+			// Libera referências das linhas inalteradas do lote bruto antes do upsert
+			const upsertsInBatchCount = rowsToUpsert.length;
+			rows.length = 0;
+
+			// 8. Grava alterações em sub-lotes de 500 registros
+			if (upsertsInBatchCount > 0) {
+				const upsertedCount = await this.upsertBatch(safeTableName, config.primaryKey, rowsToUpsert);
+				totalUpserted += upsertedCount;
+			}
 
 			// 9. Desaloca memória explicitamente para manter V8 Heap estável
 			rowsToUpsert.length = 0;
-			activeBatchRows.length = 0;
-			dbHashMap.clear();
-			rows.length = 0;
+
+			console.info(
+				`[DynamicTableManager] [Lote #${batchIndex}] Processado: ${rowCount} rows (${upsertsInBatchCount} upserts, ${skippedInBatch} inalteradas descartadas). ${hasCursorMacro ? `Cursor: "${currentCursor}"` : `Offset: ${offset}`}`,
+			);
 
 			// 10. Proteção contra Loop Infinito: se estiver usando macro de cursor e o cursor não avançar
 			if (hasCursorMacro && !cursorAdvanced && rowCount >= batchSize) {
@@ -300,9 +376,17 @@ export class DynamicTableManager implements IDynamicTableManager {
 				SELECT "${sanitizedPk}"::text AS "pk" FROM "${safeTableName}";
 			`);
 
-			const pksToDelete = localPksRaw
-				.map((r) => String(r.pk).trim())
-				.filter((pk) => !seenPksInSync.has(pk));
+			const pksToDelete: string[] = [];
+			for (const rec of localPksRaw) {
+				if (rec.pk !== null && rec.pk !== undefined) {
+					const pk = String(rec.pk).trim();
+					if (pk && !seenPksInSync.has(pk)) {
+						pksToDelete.push(pk);
+					}
+				}
+			}
+			localPksRaw.length = 0;
+			seenPksInSync.clear();
 
 			if (pksToDelete.length > 0) {
 				console.info(
@@ -312,11 +396,10 @@ export class DynamicTableManager implements IDynamicTableManager {
 				totalDeleted += deletedCount;
 			}
 
-			localPksRaw.length = 0;
 			pksToDelete.length = 0;
+		} else {
+			seenPksInSync.clear();
 		}
-
-		seenPksInSync.clear();
 
 		const durationMs = Date.now() - startTime;
 		const summaryMessage = `Sincronização HASH_COMPARATOR concluída: ${totalProcessed} registros analisados em ${batchIndex} lote(s) (${totalUpserted} modificados/inseridos, ${totalSkipped} inalterados, ${totalDeleted} deletados) em ${durationMs}ms. ${hasCursorMacro ? `Cursor final: "${currentCursor}"` : `Offset final: ${offset}`}.`;

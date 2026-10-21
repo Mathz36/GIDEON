@@ -30,6 +30,7 @@ export interface IErpSyncScheduler {
 }
 
 export class ErpSyncScheduler implements IErpSyncScheduler {
+	private static readonly ADVISORY_LOCK_KEY = 849201746;
 	private timer: NodeJS.Timeout | null = null;
 	private isRunning = false;
 	private readonly activeJobLocks = new Set<string>();
@@ -74,18 +75,65 @@ export class ErpSyncScheduler implements IErpSyncScheduler {
 	}
 
 	/**
+	 * Tenta adquirir o Distributed Lock via PostgreSQL Advisory Lock.
+	 * Garante exclusão mútua entre múltiplas instâncias/containers do backend.
+	 */
+	private async tryAcquireDistributedLock(): Promise<boolean> {
+		if (typeof this.prisma.$queryRaw !== 'function') {
+			return true;
+		}
+
+		const result = await this.prisma.$queryRaw<Array<{ acquired: boolean }>>`
+			SELECT pg_try_advisory_lock(${ErpSyncScheduler.ADVISORY_LOCK_KEY}) AS "acquired"
+		`;
+
+		if (!Array.isArray(result) || result.length === 0) {
+			return true;
+		}
+
+		return Boolean(result[0]?.acquired);
+	}
+
+	/**
+	 * Libera o PostgreSQL Advisory Lock adquirido pela sessão atual.
+	 */
+	private async releaseDistributedLock(): Promise<void> {
+		if (typeof this.prisma.$queryRaw !== 'function') {
+			return;
+		}
+
+		try {
+			await this.prisma.$queryRaw`
+				SELECT pg_advisory_unlock(${ErpSyncScheduler.ADVISORY_LOCK_KEY}) AS "unlocked"
+			`;
+		} catch (unlockError) {
+			console.error('[ErpSyncScheduler] Falha ao liberar PostgreSQL Advisory Lock:', unlockError);
+		}
+	}
+
+	/**
 	 * Loop de Fundo (Tick): Busca sincronizações pendentes e executa sequencialmente.
-	 * Utiliza a flag `isRunning` como Lock de execução para impedir ticks concorrentes.
+	 * Utiliza a flag `isRunning` em memória combinada com PostgreSQL Advisory Lock (`pg_try_advisory_lock`)
+	 * para impedir ticks concorrentes tanto localmente quanto entre múltiplos containers/instâncias.
 	 */
 	async tick(): Promise<void> {
 		if (this.isRunning) {
-			console.info('[ErpSyncScheduler] Ciclo anterior ainda em processamento. Ignorando este tick (Lock ativo).');
+			console.info('[ErpSyncScheduler] Ciclo anterior ainda em processamento. Ignorando este tick (Lock local ativo).');
 			return;
 		}
 
 		this.isRunning = true;
+		let dbLockAcquired = false;
 
 		try {
+			dbLockAcquired = await this.tryAcquireDistributedLock();
+			if (!dbLockAcquired) {
+				console.info(
+					'[ErpSyncScheduler] Outra instância do backend detém o PostgreSQL Advisory Lock. Ignorando este tick.',
+				);
+				return;
+			}
+
 			const now = new Date();
 
 			// Busca jobs pendentes: ativos, não manuais, não em execução e com data de execução vencida ou nula
@@ -115,6 +163,9 @@ export class ErpSyncScheduler implements IErpSyncScheduler {
 		} catch (error) {
 			console.error('[ErpSyncScheduler] Erro durante o tick de sincronização:', error);
 		} finally {
+			if (dbLockAcquired) {
+				await this.releaseDistributedLock();
+			}
 			this.isRunning = false;
 		}
 	}
