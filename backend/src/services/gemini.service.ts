@@ -7,6 +7,12 @@ import {
 	GenerateContentStreamResult,
 } from '@google/generative-ai';
 
+export const STRICT_GROUNDING_SYSTEM_INSTRUCTION =
+	'REGRA INVIOLÁVEL DE GROUNDING: Você NUNCA deve inventar, estimar, supor ou alucinar nomes de clientes, valores financeiros, quantidades de estoque, datas, códigos ou quaisquer dados que não estejam explicitamente presentes nos DADOS REAIS DO BANCO fornecidos no contexto. Se os dados fornecidos estiverem vazios ou não contiverem a resposta para a pergunta, diga claramente que não há registros disponíveis no banco de dados sincronizado do ERP para responder à solicitação.';
+
+export const DEFAULT_SQL_SYSTEM_INSTRUCTION =
+	'Você é um gerador determinístico de queries SQL PostgreSQL somente leitura (SELECT / WITH). Retorne APENAS o bloco SQL dentro de ```sql ... ```, utilizando exclusivamente as tabelas e colunas presentes no esquema fornecido.';
+
 export interface GeminiMessage {
 	role: 'user' | 'model';
 	parts: Array<{ text: string }>;
@@ -43,12 +49,76 @@ export class GeminiService {
 		this.initialRetryDelayMs = options.initialRetryDelayMs ?? 500;
 	}
 
+	/**
+	 * Gera query SQL com determinismo máximo (temperature: 0.0).
+	 */
+	async generateSqlQuery(
+		promptOrHistory: string | GeminiMessage[],
+		systemPrompt: string = DEFAULT_SQL_SYSTEM_INSTRUCTION,
+	): Promise<string> {
+		const history: GeminiMessage[] =
+			typeof promptOrHistory === 'string'
+				? [{ role: 'user', parts: [{ text: promptOrHistory }] }]
+				: promptOrHistory;
+
+		const model = this.createModel(systemPrompt, {
+			temperature: 0.0,
+			topP: 0.8,
+		});
+		const contents = GeminiService.normalizeHistory(history);
+		const result = await model.generateContent({ contents });
+		return result.response.text();
+	}
+
+	/**
+	 * Gera resposta de chat em streaming com Grounding Estrito e Zero Alucinação reforçados na systemInstruction.
+	 */
+	async *streamChatResponse(
+		history: GeminiMessage[],
+		systemPrompt: string,
+		parameters: GeminiParameters = { temperature: 0.1, topP: 0.9 },
+	): AsyncGenerator<string, void, undefined> {
+		const groundedSystemPrompt = GeminiService.withStrictGroundingInstruction(systemPrompt);
+		const model = this.createModel(groundedSystemPrompt, parameters);
+		const contents = GeminiService.normalizeHistory(history);
+
+		for await (const chunk of this.withExponentialBackoff(() => model.generateContentStream({ contents }))) {
+			const text = chunk.text();
+			if (text) {
+				yield text;
+			}
+		}
+	}
+
+	/**
+	 * Gera resposta de chat completa com Grounding Estrito e Zero Alucinação reforçados na systemInstruction.
+	 */
+	async generateChatResponse(
+		history: GeminiMessage[],
+		systemPrompt: string,
+		parameters: GeminiParameters = { temperature: 0.1, topP: 0.9 },
+	): Promise<string> {
+		const groundedSystemPrompt = GeminiService.withStrictGroundingInstruction(systemPrompt);
+		const model = this.createModel(groundedSystemPrompt, parameters);
+		const contents = GeminiService.normalizeHistory(history);
+		const result = await model.generateContent({ contents });
+		return result.response.text();
+	}
+
+	/**
+	 * Alias compatível com rotas existentes que transmite a resposta aplicando a diretiva de Grounding Estrito.
+	 */
 	async *streamResponse(
 		history: GeminiMessage[],
 		systemPrompt: string,
 		parameters: GeminiParameters,
 	): AsyncGenerator<string, void, undefined> {
-		const model = this.createModel(systemPrompt, parameters);
+		const isInternalKeywordExtractor = systemPrompt.includes('Processamento de Linguagem Natural (NLP)');
+		const effectiveSystemPrompt = isInternalKeywordExtractor
+			? systemPrompt
+			: GeminiService.withStrictGroundingInstruction(systemPrompt);
+
+		const model = this.createModel(effectiveSystemPrompt, parameters);
 		const contents = GeminiService.normalizeHistory(history);
 
 		for await (const chunk of this.withExponentialBackoff(() => model.generateContentStream({ contents }))) {
@@ -68,6 +138,14 @@ export class GeminiService {
 		const contents = GeminiService.normalizeHistory(history);
 		const result = await model.generateContent({ contents });
 		return result.response.text();
+	}
+
+	private static withStrictGroundingInstruction(systemPrompt: string): string {
+		const trimmed = systemPrompt.trim();
+		if (trimmed.includes('REGRA INVIOLÁVEL DE GROUNDING:')) {
+			return trimmed;
+		}
+		return `${trimmed}\n\n${STRICT_GROUNDING_SYSTEM_INSTRUCTION}`;
 	}
 
 	private createModel(systemPrompt: string, parameters: GeminiParameters): GenerativeModel {
