@@ -23,10 +23,20 @@ app.use(express.json({ limit: '1mb' }));
 app.use('/api', apiRouter);
 app.use(apiErrorHandler);
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
 	console.info(`Servidor do Gideon escutando na porta ${port}.`);
 	erpSyncScheduler.start();
 	void authService.ensureInitialAdmin();
+});
+
+server.on('error', (err: NodeJS.ErrnoException) => {
+	if (err.code === 'EADDRINUSE') {
+		console.error(
+			`[Servidor] A porta ${port} já está ocupada por outra instância do backend. Feche o terminal anterior ou rode: fuser -k ${port}/tcp`,
+		);
+		process.exit(1);
+	}
+	throw err;
 });
 
 export default app;
