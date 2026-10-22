@@ -201,3 +201,31 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/src/modules/data-dictionary/application/use-cases/build-sql-generation-prompt.use-case.ts`
   - `backend/src/__tests__/ai-rag-prompt-and-keywords.test.ts`
   - `MEMORY_PALACE.md`
+
+
+### [2026-10-21] — Expansão Visual de Gráficos e Matriz Heurística de Decisão de BI
+- **Agentes Responsáveis:** `ai-specialist`, `frontend`, `tester`
+- **Tipo:** `feat` / `test`
+- **Contexto & Motivação:**
+  Anteriormente a Gideon só gerava gráficos de colunas verticais (`bar`) devido a um exemplo few-shot único no System Prompt. Expandiu-se o repertório visual no frontend e treinou-se a IA com uma Matriz Heurística rigorosa para seleção automática do tipo de gráfico ideal de acordo com o contexto analítico.
+- **Implementações Realizadas:**
+  1. **Frontend (`DynamicDashboard.tsx`):**
+     * Suporte expandido para `type: 'bar' | 'horizontal-bar' | 'line' | 'area' | 'pie' | 'table'`.
+     * Implementação de `area` (AreaChart com gradiente índigo suave e IDs de defs seguros via `React.useId`).
+     * Implementação de `horizontal-bar` (BarChart vertical com altura dinâmica `data.length * 38px`, eixos numéricos compactos PT-BR e truncamento de nomes de clientes/produtos, ideal para mobile).
+     * Refinamento de `pie` para formato Donut (`innerRadius={46}`) com legenda contextual e tratamento seguro para fatias zeradas.
+  2. **Prompt Engineering & Matriz Heurística (`ai-configuration.service.ts` & `chat-rag.service.ts`):**
+     * `line` / `area`: Obrigatório para séries temporais e evolução cronológica.
+     * `horizontal-bar`: Obrigatório para rankings e Top N (evitando truncamento de nomes no celular).
+     * `bar`: Indicado para comparações discretas de poucas categorias (< 7 itens).
+     * `pie`: Exclusivo para composição percentual de poucas fatias (3 a 5 categorias, máximo 6, proibido para séries temporais).
+     * `table`: Obrigatório para relatórios analíticos com 3 ou mais atributos de detalhe.
+     * Few-shot examples ricos injetados para cada um dos 6 formatos.
+  3. **Suíte de Testes Automatizados (`chart-decision-matrix.test.ts`):**
+     * 15 novos testes validando a matriz de decisão, extração de blocos dashboard, regras de formatação e sanitização resiliente para fallback de tabela. Totalizando 40 testes passando no projeto.
+- **Arquivos Impactados:**
+  - `frontend/src/components/chat/DynamicDashboard.tsx`
+  - `backend/src/services/ai-configuration.service.ts`
+  - `backend/src/services/chat-rag.service.ts`
+  - `backend/src/__tests__/chart-decision-matrix.test.ts`
+  - `MEMORY_PALACE.md`
