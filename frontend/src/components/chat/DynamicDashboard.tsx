@@ -1,10 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useId, useMemo, useState } from 'react';
 import {
 	ResponsiveContainer,
 	BarChart,
 	Bar,
 	LineChart,
 	Line,
+	AreaChart,
+	Area,
 	PieChart,
 	Pie,
 	Cell,
@@ -16,6 +18,8 @@ import {
 } from 'recharts';
 import {
 	BarChart3,
+	BarChartHorizontal,
+	AreaChart as LucideAreaChart,
 	Table as TableIcon,
 	TrendingUp,
 	PieChart as PieIcon,
@@ -25,7 +29,7 @@ import {
 } from 'lucide-react';
 
 export interface DashboardData {
-	type: 'bar' | 'line' | 'pie' | 'table';
+	type: 'bar' | 'horizontal-bar' | 'line' | 'area' | 'pie' | 'table';
 	title?: string;
 	data: Array<Record<string, unknown>>;
 }
@@ -149,6 +153,7 @@ function truncateLabel(label: unknown, maxLength = 16): string {
 }
 
 export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ configString }) => {
+	const gradientId = useId().replace(/:/g, '');
 	// 'auto' usa Cards no mobile (< sm) e Tabela no desktop (>= sm) para type === 'table'
 	const [tableLayout, setTableLayout] = useState<'auto' | 'cards' | 'table'>('auto');
 
@@ -187,7 +192,12 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 				});
 
 			const validType: DashboardData['type'] =
-				raw.type === 'bar' || raw.type === 'line' || raw.type === 'pie' || raw.type === 'table'
+				raw.type === 'bar' ||
+				raw.type === 'horizontal-bar' ||
+				raw.type === 'line' ||
+				raw.type === 'area' ||
+				raw.type === 'pie' ||
+				raw.type === 'table'
 					? raw.type
 					: 'table';
 
@@ -273,6 +283,14 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 		'name';
 
 	const isPrimaryValueCurrency = isCurrencyField(valueKey, title);
+
+	const validPieData = useMemo(() => {
+		if (type !== 'pie') return [];
+		return data.filter((item) => {
+			const num = parseNumericValue(item[valueKey]);
+			return num !== null && num > 0;
+		});
+	}, [data, type, valueKey]);
 
 	const renderTableCards = () => (
 		<div className="grid max-h-[26rem] grid-cols-1 gap-2.5 overflow-y-auto pr-1 custom-scrollbar sm:grid-cols-2">
@@ -394,7 +412,9 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 			<div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
 				<div className="flex min-w-0 items-center gap-2">
 					{type === 'bar' && <BarChart3 className="h-4 w-4 shrink-0 text-indigo-600" />}
+					{type === 'horizontal-bar' && <BarChartHorizontal className="h-4 w-4 shrink-0 text-indigo-600" />}
 					{type === 'line' && <TrendingUp className="h-4 w-4 shrink-0 text-emerald-600" />}
+					{type === 'area' && <LucideAreaChart className="h-4 w-4 shrink-0 text-indigo-600" />}
 					{type === 'pie' && <PieIcon className="h-4 w-4 shrink-0 text-amber-600" />}
 					{type === 'table' && <TableIcon className="h-4 w-4 shrink-0 text-sky-600" />}
 					<h3 className="truncate text-xs font-semibold text-slate-800 sm:text-sm">
@@ -498,6 +518,57 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 				</div>
 			)}
 
+			{type === 'horizontal-bar' && (
+				<div
+					className="w-full pt-2"
+					style={{ height: `${Math.max(260, Math.min(560, data.length * 38 + 36))}px` }}
+				>
+					<ResponsiveContainer width="100%" height="100%">
+						<BarChart
+							layout="vertical"
+							data={data}
+							margin={{ top: 8, right: 16, left: 4, bottom: 8 }}
+						>
+							<CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+							<XAxis
+								type="number"
+								stroke="#64748b"
+								fontSize={11}
+								tickLine={false}
+								axisLine={false}
+								tickFormatter={(val) => formatAxisCompactPtBr(val, isPrimaryValueCurrency)}
+							/>
+							<YAxis
+								type="category"
+								dataKey={nameKey}
+								stroke="#64748b"
+								fontSize={11}
+								tickLine={false}
+								axisLine={{ stroke: '#cbd5e1' }}
+								width={104}
+								interval={0}
+								tickFormatter={(val) => truncateLabel(val, 16)}
+							/>
+							<Tooltip
+								contentStyle={{
+									backgroundColor: '#0f172a',
+									borderRadius: '0.75rem',
+									border: '1px solid #334155',
+									color: '#fff',
+									fontSize: '0.75rem',
+									boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
+								}}
+								formatter={(val: unknown) => [
+									formatFullValuePtBr(val, valueKey, title),
+									formatColumnLabel(valueKey),
+								]}
+							/>
+							<Bar dataKey={valueKey} fill="#4f46e5" radius={[0, 6, 6, 0]} maxBarSize={28} />
+						</BarChart>
+					</ResponsiveContainer>
+				</div>
+			)}
+
 			{type === 'line' && (
 				<div className="h-64 w-full pt-2 sm:h-72">
 					<ResponsiveContainer width="100%" height="100%">
@@ -547,25 +618,92 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 				</div>
 			)}
 
-			{type === 'pie' && (
+			{type === 'area' && (
+				<div className="h-64 w-full pt-2 sm:h-72">
+					<ResponsiveContainer width="100%" height="100%">
+						<AreaChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: data.length > 4 ? 28 : 12 }}>
+							<defs>
+								<linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+									<stop offset="5%" stopColor="#4f46e5" stopOpacity={0.4} />
+									<stop offset="95%" stopColor="#4f46e5" stopOpacity={0.0} />
+								</linearGradient>
+							</defs>
+							<CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+							<XAxis
+								dataKey={nameKey}
+								stroke="#64748b"
+								fontSize={11}
+								tickLine={false}
+								axisLine={{ stroke: '#cbd5e1' }}
+								angle={data.length > 4 ? -25 : 0}
+								textAnchor={data.length > 4 ? 'end' : 'middle'}
+								interval="preserveStartEnd"
+								tickFormatter={(val) => truncateLabel(val, 14)}
+							/>
+							<YAxis
+								stroke="#64748b"
+								fontSize={11}
+								tickLine={false}
+								axisLine={false}
+								width={isPrimaryValueCurrency ? 66 : 52}
+								tickFormatter={(val) => formatAxisCompactPtBr(val, isPrimaryValueCurrency)}
+							/>
+							<Tooltip
+								contentStyle={{
+									backgroundColor: '#0f172a',
+									borderRadius: '0.75rem',
+									border: '1px solid #334155',
+									color: '#fff',
+									fontSize: '0.75rem',
+									boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
+								}}
+								formatter={(val: unknown) => [
+									formatFullValuePtBr(val, valueKey, title),
+									formatColumnLabel(valueKey),
+								]}
+							/>
+							<Area
+								type="monotone"
+								dataKey={valueKey}
+								stroke="#4f46e5"
+								strokeWidth={2.5}
+								fillOpacity={1}
+								fill={`url(#${gradientId})`}
+								activeDot={{ r: 5, stroke: '#4f46e5', strokeWidth: 2, fill: '#ffffff' }}
+							/>
+						</AreaChart>
+					</ResponsiveContainer>
+				</div>
+			)}
+
+			{type === 'pie' && validPieData.length === 0 && (
+				<div className="my-4 flex h-48 w-full flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-center text-xs text-slate-500">
+					<AlertCircle className="mb-1.5 h-5 w-5 text-slate-400" />
+					<p className="font-medium text-slate-600">Nenhum valor positivo para exibir no gráfico</p>
+					<p className="mt-0.5 text-[11px] text-slate-400">Todos os valores deste conjunto de dados são zero ou nulos.</p>
+				</div>
+			)}
+
+			{type === 'pie' && validPieData.length > 0 && (
 				<div className="h-64 w-full pt-2 sm:h-72">
 					<ResponsiveContainer width="100%" height="100%">
 						<PieChart>
 							<Pie
-								data={data}
+								data={validPieData}
 								dataKey={valueKey}
 								nameKey={nameKey}
 								cx="50%"
-								cy="46%"
-								outerRadius={78}
-								innerRadius={36}
-								paddingAngle={3}
-								label={({ name, percent }: { name?: unknown; percent?: number }) =>
-									`${truncateLabel(name, 12)} (${(((percent as number) || 0) * 100).toFixed(0)}%)`
-								}
+								cy="44%"
+								outerRadius={80}
+								innerRadius={46}
+								paddingAngle={2}
+								label={({ name, percent }: { name?: unknown; percent?: number }) => {
+									const pct = (percent ?? 0) * 100;
+									return pct >= 5 ? `${truncateLabel(name, 12)} (${pct.toFixed(0)}%)` : '';
+								}}
 								labelLine={false}
 							>
-								{data.map((_, index) => (
+								{validPieData.map((_, index) => (
 									<Cell key={`cell-${index}`} fill={PALETTE[index % PALETTE.length]} />
 								))}
 							</Pie>
@@ -576,13 +714,22 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 									border: '1px solid #334155',
 									color: '#fff',
 									fontSize: '0.75rem',
+									boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
 								}}
 								formatter={(val: unknown) => [
 									formatFullValuePtBr(val, valueKey, title),
 									formatColumnLabel(valueKey),
 								]}
 							/>
-							<Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '0.72rem' }} />
+							<Legend
+								verticalAlign="bottom"
+								height={40}
+								iconType="circle"
+								wrapperStyle={{ fontSize: '0.72rem', paddingTop: '8px' }}
+								formatter={(val: unknown) => (
+									<span className="font-medium text-slate-600">{truncateLabel(val, 18)}</span>
+								)}
+							/>
 						</PieChart>
 					</ResponsiveContainer>
 				</div>
