@@ -52,14 +52,16 @@ const PALETTE = [
 const CURRENCY_KEY_REGEX = /(valor|vlr|faturamento|receita|total|preco|preço|limite|custo|ticket|saldo|lucro|desconto|r\$)/i;
 const ID_OR_CODE_KEY_REGEX = /^(id|cod|codigo|código|num|nro|numero|número|nota|pedido|cpf|cnpj|cep|ano)/i;
 
-function isCurrencyField(key: string, title?: string): boolean {
-	if (ID_OR_CODE_KEY_REGEX.test(key.trim())) {
+function isCurrencyField(key?: unknown, title?: string): boolean {
+	if (!key) return false;
+	const str = String(key).trim();
+	if (ID_OR_CODE_KEY_REGEX.test(str)) {
 		return false;
 	}
-	if (CURRENCY_KEY_REGEX.test(key)) {
+	if (CURRENCY_KEY_REGEX.test(str)) {
 		return true;
 	}
-	if (title && CURRENCY_KEY_REGEX.test(title) && /^(value|val|y)$/i.test(key.trim())) {
+	if (title && CURRENCY_KEY_REGEX.test(title) && /^(value|val|y)$/i.test(str)) {
 		return true;
 	}
 	return false;
@@ -109,19 +111,21 @@ function formatAxisCompactPtBr(val: unknown, isCurrency: boolean): string {
 	return `${prefix}${num.toLocaleString('pt-BR', { maximumFractionDigits: isCurrency ? 0 : 2 })}`;
 }
 
-function formatFullValuePtBr(val: unknown, key: string, title?: string): string {
+function formatFullValuePtBr(val: unknown, key?: unknown, title?: string): string {
 	if (val === null || val === undefined || val === '') {
 		return '-';
 	}
 
+	const strKey = String(key ?? '').trim();
+
 	// Evita formatar códigos/IDs como número com separador de milhar ou moeda
-	if (ID_OR_CODE_KEY_REGEX.test(key.trim()) && (typeof val === 'number' || typeof val === 'string')) {
+	if (strKey && ID_OR_CODE_KEY_REGEX.test(strKey) && (typeof val === 'number' || typeof val === 'string')) {
 		return String(val);
 	}
 
 	const num = parseNumericValue(val);
 	if (num !== null) {
-		if (isCurrencyField(key, title)) {
+		if (isCurrencyField(strKey, title)) {
 			return num.toLocaleString('pt-BR', {
 				style: 'currency',
 				currency: 'BRL',
@@ -139,8 +143,9 @@ function formatFullValuePtBr(val: unknown, key: string, title?: string): string 
 	return String(val);
 }
 
-function formatColumnLabel(key: string): string {
-	return key
+function formatColumnLabel(key?: unknown): string {
+	if (!key) return '';
+	return String(key)
 		.replace(/_/g, ' ')
 		.replace(/([a-z])([A-Z])/g, '$1 $2')
 		.trim();
@@ -153,23 +158,37 @@ function truncateLabel(label: unknown, maxLength = 16): string {
 }
 
 export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ configString }) => {
-	const gradientId = useId().replace(/:/g, '');
+	const rawId = useId();
+	const gradientId = useMemo(() => `grad-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`, [rawId]);
 	// 'auto' usa Cards no mobile (< sm) e Tabela no desktop (>= sm) para type === 'table'
 	const [tableLayout, setTableLayout] = useState<'auto' | 'cards' | 'table'>('auto');
 
 	const parsedResult = useMemo(() => {
-		const cleaned = configString
-			.trim()
+		let rawContent = String(configString ?? '').trim();
+
+		// Remove cercas markdown ```dashboard ou ```json residuais
+		rawContent = rawContent
 			.replace(/^```(?:dashboard|json)?\s*/i, '')
 			.replace(/\s*```$/i, '')
 			.trim();
 
-		if (!cleaned) {
+		if (!rawContent) {
 			return { status: 'empty' as const, config: null };
 		}
 
+		// Extrai com precisão o bloco JSON delimitado por chaves {}
+		const firstBrace = rawContent.indexOf('{');
+		const lastBrace = rawContent.lastIndexOf('}');
+
+		if (firstBrace === -1) {
+			return { status: 'streaming' as const, config: null };
+		}
+
+		const isLikelyStreaming = lastBrace === -1 || lastBrace <= firstBrace;
+		const jsonCandidate = !isLikelyStreaming ? rawContent.slice(firstBrace, lastBrace + 1) : rawContent.slice(firstBrace);
+
 		try {
-			const raw = JSON.parse(cleaned) as Partial<DashboardData>;
+			const raw = JSON.parse(jsonCandidate) as Partial<DashboardData>;
 			if (!raw || typeof raw !== 'object') {
 				return { status: 'invalid' as const, config: null };
 			}
@@ -180,8 +199,7 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 				.map((row) => {
 					const normalizedRow: Record<string, unknown> = {};
 					for (const [k, v] of Object.entries(row)) {
-						// Converte strings numéricas para number se não for campo de código/ID
-						if (!ID_OR_CODE_KEY_REGEX.test(k.trim()) && typeof v === 'string') {
+						if (!ID_OR_CODE_KEY_REGEX.test(String(k).trim()) && typeof v === 'string') {
 							const parsedNum = parseNumericValue(v);
 							normalizedRow[k] = parsedNum !== null ? parsedNum : v;
 						} else {
@@ -210,8 +228,6 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 				},
 			};
 		} catch {
-			// Se parece que o JSON ainda está chegando via stream SSE (não fechou chaves/colchetes)
-			const isLikelyStreaming = !cleaned.endsWith('}');
 			return {
 				status: isLikelyStreaming ? ('streaming' as const) : ('invalid' as const),
 				config: null,
@@ -258,10 +274,16 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 	// Coleta todas as chaves presentes nas linhas para evitar omissão se a primeira linha tiver campos ausentes
 	const allKeys = Array.from(
 		data.reduce((acc, row) => {
-			Object.keys(row).forEach((k) => acc.add(k));
+			if (row && typeof row === 'object') {
+				Object.keys(row).forEach((k) => acc.add(k));
+			}
 			return acc;
 		}, new Set<string>())
 	);
+
+	if (allKeys.length === 0) {
+		return null;
+	}
 
 	const sample = data[0] || {};
 
@@ -287,6 +309,7 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 	const validPieData = useMemo(() => {
 		if (type !== 'pie') return [];
 		return data.filter((item) => {
+			if (!item || typeof item !== 'object') return false;
 			const num = parseNumericValue(item[valueKey]);
 			return num !== null && num > 0;
 		});
@@ -476,7 +499,7 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 
 			{type === 'bar' && (
 				<div className="h-64 w-full pt-2 sm:h-72">
-					<ResponsiveContainer width="100%" height="100%">
+					<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
 						<BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: data.length > 4 ? 28 : 12 }}>
 							<CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
 							<XAxis
@@ -523,7 +546,7 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 					className="w-full pt-2"
 					style={{ height: `${Math.max(260, Math.min(560, data.length * 38 + 36))}px` }}
 				>
-					<ResponsiveContainer width="100%" height="100%">
+					<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
 						<BarChart
 							layout="vertical"
 							data={data}
@@ -571,7 +594,7 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 
 			{type === 'line' && (
 				<div className="h-64 w-full pt-2 sm:h-72">
-					<ResponsiveContainer width="100%" height="100%">
+					<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
 						<LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 16 }}>
 							<CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
 							<XAxis
@@ -620,7 +643,7 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 
 			{type === 'area' && (
 				<div className="h-64 w-full pt-2 sm:h-72">
-					<ResponsiveContainer width="100%" height="100%">
+					<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
 						<AreaChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: data.length > 4 ? 28 : 12 }}>
 							<defs>
 								<linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -686,7 +709,7 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 
 			{type === 'pie' && validPieData.length > 0 && (
 				<div className="h-64 w-full pt-2 sm:h-72">
-					<ResponsiveContainer width="100%" height="100%">
+					<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
 						<PieChart>
 							<Pie
 								data={validPieData}

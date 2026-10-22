@@ -229,3 +229,28 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/src/services/chat-rag.service.ts`
   - `backend/src/__tests__/chart-decision-matrix.test.ts`
   - `MEMORY_PALACE.md`
+
+
+### [2026-10-22] — Blindagem Anti-Crash e Error Boundary nos Gráficos Dinâmicos
+- **Agente Responsável:** `frontend`
+- **Tipo:** `fix` / `perf`
+- **Contexto & Motivação:**
+  Identificado que a tela ficava branca ao abrir gráficos no chat devido a ausência de React ErrorBoundary (erros de renderização de SVG/Recharts ou parsing de chunks SSE derrubavam toda a árvore do React) e manipulações de strings não protegidas contra `null`/`undefined` em formatadores.
+- **Implementações Realizadas:**
+  1. **Criação do `ErrorBoundary` (`frontend/src/components/common/ErrorBoundary.tsx`):**
+     * Componente resiliente com modo compacto (para itens isolados de chat) e modo página inteira.
+     * Captura qualquer exceção não tratada durante o render e impede que o React desmonte o aplicativo.
+  2. **Isolamento de Erros no Chat e Rotas (`Chat.tsx` e `App.tsx`):**
+     * `<DynamicDashboard />` envolvido em `<ErrorBoundary compact>` dentro de `markdownComponents.code`.
+     * Rotas principais do `<App />` blindadas com `<ErrorBoundary>`.
+     * `rawContent` extraído com `.join('')` para evitar inserção indevida de vírgulas de arrays gerados pelo ReactMarkdown.
+  3. **Blindagem e Null-Safety em `DynamicDashboard.tsx`:**
+     * `isCurrencyField`, `formatFullValuePtBr`, `formatColumnLabel` e `truncateLabel` 100% protegidos contra valores nulos/indefinidos.
+     * Parser JSON com extração resiliente delimitada por `{` e `}`.
+     * Adicionados `minWidth={100}` e `minHeight={220}` em todos os `ResponsiveContainer` para impedir colapso de dimensão em Recharts.
+- **Arquivos Impactados:**
+  - `frontend/src/components/common/ErrorBoundary.tsx`
+  - `frontend/src/components/chat/DynamicDashboard.tsx`
+  - `frontend/src/pages/Chat.tsx`
+  - `frontend/src/App.tsx`
+  - `MEMORY_PALACE.md`

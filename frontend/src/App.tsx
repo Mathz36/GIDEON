@@ -6,6 +6,7 @@ import AdminUsers from './pages/AdminUsers';
 import Chat from './pages/Chat';
 import Login from './pages/Login';
 import ProtectedRoute from './components/ProtectedRoute';
+import ErrorBoundary from './components/common/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Bot, Database, LogOut, MessageSquare, Shield, User as UserIcon, Users as UsersIcon } from 'lucide-react';
 
@@ -102,42 +103,44 @@ export default function App() {
 				<div className="flex h-screen flex-col overflow-hidden bg-slate-50">
 					<NavigationHeader />
 					<div className="flex-1 min-h-0 overflow-y-auto">
-						<Routes>
-							<Route path="/login" element={<Login />} />
-							<Route
-								path="/"
-								element={
-									<ProtectedRoute>
-										<Chat />
-									</ProtectedRoute>
-								}
-							/>
-							<Route
-								path="/admin/erp"
-								element={
-									<ProtectedRoute requiredRole="ADMIN">
-										<AdminERP />
-									</ProtectedRoute>
-								}
-							/>
-							<Route
-								path="/admin/ai"
-								element={
-									<ProtectedRoute requiredRole="ADMIN">
-										<AdminAI />
-									</ProtectedRoute>
-								}
-							/>
-							<Route
-								path="/admin/users"
-								element={
-									<ProtectedRoute requiredRole="ADMIN">
-										<AdminUsers />
-									</ProtectedRoute>
-								}
-							/>
-							<Route path="*" element={<Login />} />
-						</Routes>
+						<ErrorBoundary>
+							<Routes>
+								<Route path="/login" element={<Login />} />
+								<Route
+									path="/"
+									element={
+										<ProtectedRoute>
+											<Chat />
+										</ProtectedRoute>
+									}
+								/>
+								<Route
+									path="/admin/erp"
+									element={
+										<ProtectedRoute requiredRole="ADMIN">
+											<AdminERP />
+										</ProtectedRoute>
+									}
+								/>
+								<Route
+									path="/admin/ai"
+									element={
+										<ProtectedRoute requiredRole="ADMIN">
+											<AdminAI />
+										</ProtectedRoute>
+									}
+								/>
+								<Route
+									path="/admin/users"
+									element={
+										<ProtectedRoute requiredRole="ADMIN">
+											<AdminUsers />
+										</ProtectedRoute>
+									}
+								/>
+								<Route path="*" element={<Login />} />
+							</Routes>
+						</ErrorBoundary>
 					</div>
 				</div>
 			</BrowserRouter>

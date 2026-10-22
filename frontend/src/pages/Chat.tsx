@@ -17,6 +17,7 @@ import {
 	X,
 } from 'lucide-react';
 import { DynamicDashboard } from '../components/chat/DynamicDashboard';
+import { ErrorBoundary } from '../components/common/ErrorBoundary';
 import { useChat } from '../hooks/useChat';
 import type { ChatMessage } from '../hooks/useChat';
 
@@ -178,7 +179,19 @@ const markdownComponents = {
 
 		// Intercepta a UI Generativa (Dashboard)
 		if (!inline && language === 'dashboard') {
-			return <DynamicDashboard configString={String(children)} />;
+			const rawContent = Array.isArray(children)
+				? children.map((c) => (typeof c === 'string' ? c : '')).join('')
+				: String(children ?? '');
+
+			return (
+				<ErrorBoundary
+					compact
+					fallbackTitle="Visualização indisponível"
+					fallbackMessage="Não foi possível renderizar este gráfico interativo."
+				>
+					<DynamicDashboard configString={rawContent} />
+				</ErrorBoundary>
+			);
 		}
 
 		// Renderiza blocos de código normais (SQL, JSON puro, etc)
