@@ -14,6 +14,7 @@ export * from './application/use-cases/get-context-for-prompt.use-case';
 export * from './application/use-cases/extract-keywords.use-case';
 export * from './application/use-cases/search-metadata.use-case';
 export * from './application/use-cases/expand-relationships.use-case';
+export * from './application/use-cases/auto-detect-relationships.use-case';
 export * from './application/use-cases/build-sql-generation-prompt.use-case';
 export * from './application/use-cases/rag-sql-pipeline';
 
@@ -30,6 +31,7 @@ import { GetContextForPromptUseCase } from './application/use-cases/get-context-
 import { ExtractKeywordsUseCase } from './application/use-cases/extract-keywords.use-case';
 import { SearchMetadataUseCase } from './application/use-cases/search-metadata.use-case';
 import { ExpandRelationshipsUseCase } from './application/use-cases/expand-relationships.use-case';
+import { AutoDetectRelationshipsUseCase } from './application/use-cases/auto-detect-relationships.use-case';
 import { BuildSqlGenerationPromptUseCase } from './application/use-cases/build-sql-generation-prompt.use-case';
 import { RagSqlPipeline } from './application/use-cases/rag-sql-pipeline';
 
@@ -41,6 +43,7 @@ export const getContextForPromptUseCase = new GetContextForPromptUseCase(metaTab
 export const extractKeywordsUseCase = new ExtractKeywordsUseCase(geminiKeywordExtractor);
 export const searchMetadataUseCase = new SearchMetadataUseCase(metaTableRepository);
 export const expandRelationshipsUseCase = new ExpandRelationshipsUseCase(metaTableRepository);
+export const autoDetectRelationshipsUseCase = new AutoDetectRelationshipsUseCase(metaTableRepository);
 export const buildSqlGenerationPromptUseCase = new BuildSqlGenerationPromptUseCase();
 
 export const ragSqlPipeline = new RagSqlPipeline(

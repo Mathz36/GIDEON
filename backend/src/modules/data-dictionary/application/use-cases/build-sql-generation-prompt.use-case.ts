@@ -34,9 +34,10 @@ REGRAS ESTRITAS DE ENGENHARIA DE PROMPT E SEGURANÇA SQL:
 1. TABELAS PERMITIDAS (GROUNDING ESTRITO): Utilize ESTRITAMENTE as tabelas e colunas fornecidas no esquema abaixo. NUNCA invente nomes de tabelas ou colunas, e NUNCA acesse tabelas de sistema ou internas (como pg_catalog, information_schema, usuarios, ai_configurations, erp_configurations).
 2. SOMENTE LEITURA (READ-ONLY): Gere exclusivamente uma única instrução SELECT ou WITH ... SELECT. É estritamente proibido gerar múltiplos statements separados por ';' ou usar comandos de mutação/DDL (INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, GRANT, REVOKE, COPY, CALL, DO, EXECUTE, SET, VACUUM).
 3. CHAVES PRIMÁRIAS (PK): Cada tabela possui uma Chave Primária explicitamente sinalizada com 'PRIMARY KEY' e tag '[CHAVE PRIMÁRIA / PK]'. Use a PK para garantir unicidade em contagens (ex: COUNT(DISTINCT pk)) e agrupamentos.
-4. RELACIONAMENTOS (FK): Sempre que a consulta exigir cruzar informações entre mais de uma tabela, utilize OBRIGATORIAMENTE os caminhos de JOIN documentados nas Foreign Keys.
-5. FILTROS E TIPAGEM: Preste atenção às descrições semânticas das colunas para aplicar filtros de status (ex: 'S' para ativo), datas e valores monetários.
-6. RESPOSTA: Retorne APENAS o bloco SQL limpo e executável dentro de \`\`\`sql ... \`\`\`. Não adicione saudações ou textos desnecessários.`;
+4. RELACIONAMENTOS E JOINS (FK): Sempre que a consulta exigir cruzar informações entre mais de uma tabela, utilize OBRIGATORIAMENTE os caminhos de JOIN documentados nas Foreign Keys e na seção 'RELACIONAMENTOS E CAMINHOS DE JOIN IDENTIFICADOS'.
+5. STATUS E FILTROS DE NEGÓCIO: Preste atenção às descrições semânticas das colunas para aplicar filtros de status (ex: para vendas confirmadas/faturamento, atente para STATUS 'L' = Liberada ou TIPMOV 'V' = Venda; NUNCA filtre por cancelamento a menos que explicitamente solicitado pelo usuário).
+6. TIPAGEM E AGREGAÇÕES MONETÁRIAS: Toda soma de valores monetários ou quantidades deve converter com CAST(coluna AS NUMERIC) (ex: SUM(CAST(vlrnota AS NUMERIC))). Datas devem ser convertidas com CAST(coluna AS TIMESTAMP) ou CAST(coluna AS DATE).
+7. RESPOSTA: Retorne APENAS o bloco SQL limpo e executável dentro de \`\`\`sql ... \`\`\`. Não adicione saudações ou textos desnecessários.`;
 
 		// 4. Monta o User Prompt com a pergunta e o esquema injetado
 		const userPrompt = `### ESQUEMA DO BANCO DE DADOS (${dialect.toUpperCase()}):

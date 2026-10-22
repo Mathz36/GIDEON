@@ -145,3 +145,59 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
 - **Arquivos Impactados:**
   - `backend/prisma/schema.prisma`
   - `backend/src/server.ts`
+
+### [2026-10-21] — Migração de Session Advisory Lock para Trava Distribuída Atômica com TTL
+- **Agente Responsável:** `backend`
+- **Tipo:** `fix` / `perf` / `refactor`
+- **Contexto & Motivação:**
+  O uso de `pg_try_advisory_lock` e `pg_advisory_unlock` causava starvation perpétuo (`Outra instância do backend detém o PostgreSQL Advisory Lock`) devido ao Connection Pool do Prisma, onde a aquisição da trava e a sua liberação ocorriam em conexões TCP físicas diferentes da sessão do PostgreSQL.
+- **Implementações Realizadas:**
+  1. **Tabela Atômica de Travas Distribuídas:** Criação automática e idempotente da tabela `system_distributed_locks` (`lock_key`, `locked_by`, `acquired_at`, `expires_at`).
+  2. **Aquisição Atômica via Upsert Condicional com TTL:** Substituição de `pg_try_advisory_lock` por `INSERT ... ON CONFLICT (lock_key) DO UPDATE ... WHERE system_distributed_locks.expires_at < NOW() RETURNING lock_key` com TTL padrão de 180 segundos.
+  3. **Liberação Determinística e Segura:** Remoção no bloco `finally` condicionada a `WHERE lock_key = ... AND locked_by = instanceId`, impedindo que uma instância que tenha excedido seu TTL delete indevidamente a trava adquirida por outra instância.
+  4. **Limpeza Preventiva Legada:** Chamada resiliente a `SELECT pg_advisory_unlock_all();` na inicialização do scheduler para purgar quaisquer travas de sessão órfãs deixadas por versões anteriores.
+  5. **Suíte de Testes de Concorrência & TTL:** Criação de `scheduler-distributed-lock.test.ts` cobrindo criação da tabela, ciclo normal de vida, bloqueio de concorrência entre múltiplas instâncias, auto-expiração (deadlock recovery) e proteção contra remoções indevidas.
+- **Arquivos Impactados:**
+  - `backend/src/services/erp-sync.scheduler.ts`
+  - `backend/src/__tests__/scheduler-distributed-lock.test.ts`
+  - `MEMORY_PALACE.md`
+
+### [2026-10-21] — Auto-Detecção de FKs Virtuais, Enriquecimento Semântico e Sinônimos de Negócio
+- **Agente Responsável:** `backend`
+- **Tipo:** `feat` / `refactor`
+- **Contexto & Motivação:**
+  Eliminar o falso-positivo `SEM_DADOS_DISPONIVEIS` (`NO_RELEVANT_TABLES`) provocado pela ausência de vocabulário de negócio e viabilizar consultas cruzadas (multi-tabela com JOINs) conectando as tabelas dinâmicas em um grafo relacional sem criar FKs físicas no PostgreSQL.
+- **Implementações Realizadas:**
+  1. **Auto-Detecção de FKs Virtuais (`AutoDetectRelationshipsUseCase`):** Algoritmo heurístico que mapeia as PKs conhecidas do tenant e vincula automaticamente colunas correspondentes (ex: `CODPARC`, `CODPROD`, `NUNOTA`) inclusive com normalização de separadores (ex: `COD_PARC` -> `CODPARC`), preservando FKs manuais pré-existentes.
+  2. **Geração e Injeção de Sinônimos de Negócio (`ErpConfigurationService`):** Métodos `inferBusinessSynonyms` e `generateTableDescription` que agregam termos canônicos (faturamento, vendas, receita, pedidos, clientes, financeiro) nas descrições persistidas em `meta_tables`.
+  3. **Enriquecimento de Colunas do Sankhya ERP:** Mapeamento semântico rico para siglas críticas (`VLRNOTA`, `TIPMOV`, `STATUSNOTA`, `CODPARC`, `CODPROD`), informando tipos e valores válidos para o LLM.
+  4. **Indexação Universal no Dicionário:** Suporte a integrações sem PK de negócio explícita através da inclusão da chave surrogate `_id`, garantindo que nenhuma tabela fique invisível para o motor de busca RAG.
+  5. **Bônus de Relevância por Sinônimos (`SearchMetadataUseCase`):** Ponderação com pontuação elevada (+12) quando o termo de busca coincide com a seção de sinônimos de negócio da tabela.
+  6. **Suíte de Testes Automatizados (`schema-relationships-and-synonyms.test.ts`):** Validação de auto-detecção de relacionamentos, expansão de grafo relacional e busca semântica por sinônimos.
+- **Arquivos Impactados:**
+  - `backend/src/modules/data-dictionary/application/use-cases/auto-detect-relationships.use-case.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/search-metadata.use-case.ts`
+  - `backend/src/modules/data-dictionary/index.ts`
+  - `backend/src/services/erp-configuration.service.ts`
+  - `backend/src/__tests__/schema-relationships-and-synonyms.test.ts`
+  - `MEMORY_PALACE.md`
+
+### [2026-10-21] — Expansão Conceitual de NLP, Regras Categóricas e Guardrails Text-to-SQL
+- **Agente Responsável:** `ai-specialist`
+- **Tipo:** `feat` / `perf`
+- **Contexto & Motivação:**
+  Aprimorar a compreensão conceitual de perguntas corporativas (faturamento, clientes, produtos) mesmo quando o usuário utiliza termos informais ou quando o LLM opera sob fallback, além de blindar a geração de SQL com regras estritas para filtros de status e somas de valores do ERP.
+- **Implementações Realizadas:**
+  1. **Expansão Conceitual no NLP (`GeminiKeywordExtractorGateway`):** Ajuste do prompt do extrator para solicitar explicitamente sinônimos correlatos de negócio (faturamento -> vendas, receita, pedidos) e ampliação do `tokenizeFallback` com expansão de raízes léxicas.
+  2. **Fallback Heurístico de Keywords (`ExtractKeywordsUseCase`):** Inclusão de stopword filtering executivo e expansão semântica em caso de indisponibilidade momentânea da API do Gemini.
+  3. **Guardrails Estritos de Status e Valores no SQL (`BuildSqlGenerationPromptUseCase`):**
+     - Injeção obrigatória de regra para filtros de status (atentar para `STATUSNOTA = 'L'` ou `TIPMOV = 'V'`).
+     - Instrução para conversão e agregações financeiras com `SUM(CAST(coluna AS NUMERIC))`.
+     - Documentação explícita de caminhos de junção (`JOIN`) derivados do grafo de FKs virtuais.
+  4. **Suíte de Testes Automatizados (`ai-rag-prompt-and-keywords.test.ts`):** Validação de expansão léxica/conceitual e conformidade do prompt com regras de agregação e filtros de status.
+- **Arquivos Impactados:**
+  - `backend/src/modules/data-dictionary/infrastructure/gateways/gemini-keyword-extractor.gateway.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/extract-keywords.use-case.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/build-sql-generation-prompt.use-case.ts`
+  - `backend/src/__tests__/ai-rag-prompt-and-keywords.test.ts`
+  - `MEMORY_PALACE.md`

@@ -57,8 +57,12 @@ export class SearchMetadataUseCase {
 					matchedFields.push(`tableName: "${table.tableName}"`);
 				}
 				if (tableDescNorm.includes(kw)) {
-					score += 8;
-					matchedFields.push(`tableDesc: "${kw}"`);
+					// Bônus adicional se o match ocorrer na seção de sinônimos de negócio
+					const isSynonymMatch =
+						(tableDescNorm.includes('sinônimo') || tableDescNorm.includes('sinonimo')) &&
+						tableDescNorm.indexOf(kw) > Math.min(tableDescNorm.indexOf('sinônimo'), tableDescNorm.indexOf('sinonimo'));
+					score += isSynonymMatch ? 12 : 8;
+					matchedFields.push(`tableDesc: "${kw}"${isSynonymMatch ? ' (Sinônimo)' : ''}`);
 				}
 			}
 

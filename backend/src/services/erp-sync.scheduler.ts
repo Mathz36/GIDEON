@@ -30,16 +30,32 @@ export interface IErpSyncScheduler {
 }
 
 export class ErpSyncScheduler implements IErpSyncScheduler {
-	private static readonly ADVISORY_LOCK_KEY = 849201746;
+	public static readonly DISTRIBUTED_LOCK_KEY = 'erp_sync_scheduler';
+	public static readonly DEFAULT_LOCK_TTL_SECONDS = 180; // 3 minutos de expiração automática (TTL)
+
 	private timer: NodeJS.Timeout | null = null;
 	private isRunning = false;
 	private readonly activeJobLocks = new Set<string>();
+	private readonly instanceId: string;
+	private readonly lockTtlSeconds: number;
+	private isLockTableInitialized = false;
 
 	constructor(
 		private readonly prisma: PrismaClient = prismaClient,
 		private readonly tableManager: IDynamicTableManager = dynamicTableManager,
 		private readonly queueManager: ISyncQueueManager = syncQueueManager,
-	) {}
+		lockTtlSeconds: number = ErpSyncScheduler.DEFAULT_LOCK_TTL_SECONDS,
+	) {
+		this.lockTtlSeconds = lockTtlSeconds;
+		this.instanceId = `node_${process.pid}_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`;
+	}
+
+	/**
+	 * Retorna o identificador único desta instância do agendador.
+	 */
+	getInstanceId(): string {
+		return this.instanceId;
+	}
 
 	/**
 	 * Inicia o loop em segundo plano com setInterval (padrão: 30 segundos).
@@ -50,7 +66,12 @@ export class ErpSyncScheduler implements IErpSyncScheduler {
 			return;
 		}
 
-		console.info(`[ErpSyncScheduler] Serviço de agendamento iniciado (ciclo de ${intervalMs / 1000}s).`);
+		console.info(`[ErpSyncScheduler] Serviço de agendamento iniciado (ciclo de ${intervalMs / 1000}s, TTL do lock: ${this.lockTtlSeconds}s).`);
+
+		// Limpeza preventiva de advisory locks legados de sessões anteriores
+		if (typeof this.prisma.$queryRaw === 'function') {
+			void this.prisma.$queryRaw`SELECT pg_advisory_unlock_all();`.catch(() => {});
+		}
 
 		// Executa uma primeira checagem 5 segundos após a subida do servidor
 		setTimeout(() => {
@@ -75,27 +96,75 @@ export class ErpSyncScheduler implements IErpSyncScheduler {
 	}
 
 	/**
-	 * Tenta adquirir o Distributed Lock via PostgreSQL Advisory Lock.
-	 * Garante exclusão mútua entre múltiplas instâncias/containers do backend.
+	 * Garante idempotentemente a existência da tabela de travas distribuídas.
+	 * Independe de migrations manuais e suporta conexões poolers do PostgreSQL.
+	 */
+	private async ensureDistributedLockTable(): Promise<void> {
+		if (this.isLockTableInitialized) {
+			return;
+		}
+
+		if (typeof this.prisma.$executeRawUnsafe !== 'function') {
+			this.isLockTableInitialized = true;
+			return;
+		}
+
+		try {
+			await this.prisma.$executeRawUnsafe(`
+				CREATE TABLE IF NOT EXISTS system_distributed_locks (
+					lock_key VARCHAR(128) PRIMARY KEY,
+					locked_by VARCHAR(255) NOT NULL,
+					acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					expires_at TIMESTAMPTZ NOT NULL
+				);
+			`);
+			this.isLockTableInitialized = true;
+		} catch (error) {
+			console.error('[ErpSyncScheduler] Falha ao verificar/criar tabela system_distributed_locks:', error);
+		}
+	}
+
+	/**
+	 * Tenta adquirir o Distributed Lock atômico com TTL no PostgreSQL.
+	 * Garante exclusão mútua entre múltiplas instâncias/containers mesmo sob Connection Pooling (Prisma/PgBouncer)
+	 * e com expiração automática (TTL) para evitar bloqueios órfãos caso um container morra.
 	 */
 	private async tryAcquireDistributedLock(): Promise<boolean> {
 		if (typeof this.prisma.$queryRaw !== 'function') {
 			return true;
 		}
 
-		const result = await this.prisma.$queryRaw<Array<{ acquired: boolean }>>`
-			SELECT pg_try_advisory_lock(${ErpSyncScheduler.ADVISORY_LOCK_KEY}) AS "acquired"
-		`;
+		await this.ensureDistributedLockTable();
 
-		if (!Array.isArray(result) || result.length === 0) {
-			return true;
+		try {
+			// Upsert atômico condicional:
+			// Adquire se o registro não existir ou se a trava atual já estiver expirada (expires_at < NOW())
+			const result = await this.prisma.$queryRaw<Array<{ acquired_key: string }>>`
+				INSERT INTO system_distributed_locks (lock_key, locked_by, acquired_at, expires_at)
+				VALUES (
+					${ErpSyncScheduler.DISTRIBUTED_LOCK_KEY},
+					${this.instanceId},
+					NOW(),
+					NOW() + (${this.lockTtlSeconds} * INTERVAL '1 second')
+				)
+				ON CONFLICT (lock_key) DO UPDATE
+				SET locked_by = EXCLUDED.locked_by,
+				    acquired_at = NOW(),
+				    expires_at = EXCLUDED.expires_at
+				WHERE system_distributed_locks.expires_at < NOW()
+				RETURNING lock_key AS "acquired_key";
+			`;
+
+			return Array.isArray(result) && result.length > 0;
+		} catch (lockError) {
+			console.error('[ErpSyncScheduler] Erro ao tentar adquirir Distributed Lock com TTL:', lockError);
+			return false;
 		}
-
-		return Boolean(result[0]?.acquired);
 	}
 
 	/**
-	 * Libera o PostgreSQL Advisory Lock adquirido pela sessão atual.
+	 * Libera o Distributed Lock atômico pertencente a esta instância.
+	 * Verifica estritamente locked_by para não remover travas adquiridas por outra instância caso o TTL tenha expirado.
 	 */
 	private async releaseDistributedLock(): Promise<void> {
 		if (typeof this.prisma.$queryRaw !== 'function') {
@@ -104,16 +173,18 @@ export class ErpSyncScheduler implements IErpSyncScheduler {
 
 		try {
 			await this.prisma.$queryRaw`
-				SELECT pg_advisory_unlock(${ErpSyncScheduler.ADVISORY_LOCK_KEY}) AS "unlocked"
+				DELETE FROM system_distributed_locks
+				WHERE lock_key = ${ErpSyncScheduler.DISTRIBUTED_LOCK_KEY}
+				  AND locked_by = ${this.instanceId};
 			`;
 		} catch (unlockError) {
-			console.error('[ErpSyncScheduler] Falha ao liberar PostgreSQL Advisory Lock:', unlockError);
+			console.error('[ErpSyncScheduler] Falha ao liberar Distributed Lock:', unlockError);
 		}
 	}
 
 	/**
 	 * Loop de Fundo (Tick): Busca sincronizações pendentes e executa sequencialmente.
-	 * Utiliza a flag `isRunning` em memória combinada com PostgreSQL Advisory Lock (`pg_try_advisory_lock`)
+	 * Utiliza a flag `isRunning` em memória combinada com Distributed Lock atômico (`system_distributed_locks`)
 	 * para impedir ticks concorrentes tanto localmente quanto entre múltiplos containers/instâncias.
 	 */
 	async tick(): Promise<void> {
@@ -129,7 +200,7 @@ export class ErpSyncScheduler implements IErpSyncScheduler {
 			dbLockAcquired = await this.tryAcquireDistributedLock();
 			if (!dbLockAcquired) {
 				console.info(
-					'[ErpSyncScheduler] Outra instância do backend detém o PostgreSQL Advisory Lock. Ignorando este tick.',
+					'[ErpSyncScheduler] Outra instância do backend detém o Distributed Lock ativo. Ignorando este tick.',
 				);
 				return;
 			}
