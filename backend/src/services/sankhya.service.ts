@@ -192,6 +192,10 @@ export class SankhyaService {
 			throw new Error('A query do Sankhya não pode ser vazia.');
 		}
 
+		if (!this.config.dbExplorerUrl) {
+			throw new Error('A variável SANKHYA_SERVICE_URL não foi configurada.');
+		}
+
 		if (fields.length === 0) {
 			throw new Error('Informe ao menos um campo esperado para a consulta do Sankhya.');
 		}
@@ -336,11 +340,7 @@ export class SankhyaService {
 	}
 
 	private static getConfigFromEnvironment(): SankhyaConfig {
-		const dbExplorerUrl = process.env.SANKHYA_SERVICE_URL ?? process.env.SANKHYA_DBEXPLORER_URL;
-
-		if (!dbExplorerUrl) {
-			throw new Error('A variável SANKHYA_SERVICE_URL não foi configurada.');
-		}
+		const dbExplorerUrl = process.env.SANKHYA_SERVICE_URL ?? process.env.SANKHYA_DBEXPLORER_URL ?? '';
 
 		return {
 			apiUrl: process.env.SANKHYA_API_URL,
