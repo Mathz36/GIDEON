@@ -7,10 +7,11 @@ import chatRagService from '../services/chat-rag.service';
 import SankhyaService from '../services/sankhya.service';
 import authRouter from './auth.routes';
 import userRouter from './user.routes';
-import { requireAuth, requireAdmin } from '../middlewares/auth.middleware';
+import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middlewares/auth.middleware';
 import prismaClient from '../config/prisma';
 import erpSyncScheduler from '../services/erp-sync.scheduler';
 import syncQueueManager from '../services/sync-queue.manager';
+import userDashboardService from '../services/user-dashboard.service';
 
 interface ErpQueryBody {
 	query?: unknown;
@@ -225,6 +226,152 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 			return;
 		}
 
+		next(error);
+	}
+});
+
+/* ==================== Rotas de "Seu Dashboard" (Personalizado) ==================== */
+
+apiRouter.get('/dashboard/me', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const dashboard = await userDashboardService.getOrCreateDashboard(userId);
+		res.status(200).json({ data: dashboard });
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.post('/dashboard/widgets/generate', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const prompt = req.body?.prompt;
+		if (typeof prompt !== 'string' || !prompt.trim()) {
+			res.status(400).json({ error: 'O prompt para geração do widget é obrigatório.' });
+			return;
+		}
+
+		const widget = await userDashboardService.generateAndAddWidget(userId, prompt.trim());
+		res.status(201).json({ data: widget });
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.post('/dashboard/widgets', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const { title, type, data, colSpan, rowSpan, sqlQuery, queryPrompt } = req.body ?? {};
+		if (typeof title !== 'string' || !title.trim()) {
+			res.status(400).json({ error: 'O título do widget é obrigatório.' });
+			return;
+		}
+		if (typeof type !== 'string' || !type.trim()) {
+			res.status(400).json({ error: 'O tipo do widget é obrigatório.' });
+			return;
+		}
+
+		const widget = await userDashboardService.createWidget(userId, {
+			title: title.trim(),
+			type: type.trim() as any,
+			data,
+			colSpan: typeof colSpan === 'number' ? colSpan : undefined,
+			rowSpan: typeof rowSpan === 'number' ? rowSpan : undefined,
+			sqlQuery: typeof sqlQuery === 'string' ? sqlQuery : undefined,
+			queryPrompt: typeof queryPrompt === 'string' ? queryPrompt : undefined,
+		});
+
+		res.status(201).json({ data: widget });
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.put('/dashboard/layout', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const items = req.body?.items;
+		if (!Array.isArray(items)) {
+			res.status(400).json({ error: 'O campo items deve ser um array com o layout dos widgets.' });
+			return;
+		}
+
+		const updatedWidgets = await userDashboardService.updateLayout(userId, items);
+		res.status(200).json({ data: updatedWidgets });
+	} catch (error) {
+		const err = error as Error;
+		if (err.message && err.message.includes('Acesso negado')) {
+			res.status(403).json({ error: err.message });
+			return;
+		}
+		next(error);
+	}
+});
+
+apiRouter.post('/dashboard/widgets/:id/refresh', requireAuth, async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const widgetId = req.params.id;
+		const refreshedWidget = await userDashboardService.refreshWidget(userId, widgetId);
+		res.status(200).json({ data: refreshedWidget });
+	} catch (error) {
+		const err = error as Error;
+		if (err.message && (err.message.includes('não possui permissão') || err.message.includes('não encontrado'))) {
+			res.status(404).json({ error: err.message });
+			return;
+		}
+		next(error);
+	}
+});
+
+apiRouter.delete('/dashboard/widgets/:id', requireAuth, async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const widgetId = req.params.id;
+		const result = await userDashboardService.removeWidget(userId, widgetId);
+		res.status(200).json(result);
+	} catch (error) {
+		const err = error as Error;
+		if (err.message && (err.message.includes('não possui permissão') || err.message.includes('não encontrado'))) {
+			res.status(404).json({ error: err.message });
+			return;
+		}
 		next(error);
 	}
 });

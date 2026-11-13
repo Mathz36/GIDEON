@@ -254,3 +254,54 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/pages/Chat.tsx`
   - `frontend/src/App.tsx`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-12] — Transição do Banco de Dados para PostgreSQL Local
+- **Agente Responsável:** `planner` (Tech Lead)
+- **Tipo:** `chore` / `perf`
+- **Contexto & Motivação:**
+  O backend estava conectado a uma instância remota do Supabase com latência de rede e dependência externa. Foi ativado o banco PostgreSQL local (`gideon_db`) na porta `5432` com autenticação local.
+- **Implementações Realizadas:**
+  1. Configuração de `DATABASE_URL` e `DIRECT_URL` apontando para `postgresql://postgres:postgrespassword@localhost:5432/gideon_db?schema=public` no `backend/.env`.
+  2. Execução da migration inicial Prisma (`20261010184523_init`), criando as tabelas estruturais (`usuarios`, `ai_configurations`, `erp_configurations`, `meta_tables`, `meta_columns`).
+  3. Validação completa da suíte automatizada (40 testes unitários e de integração passando em 351ms).
+- **Arquivos Impactados:**
+  - `backend/.env`
+  - `MEMORY_PALACE.md`
+
+
+### [2026-11-13] — Módulo "Seu Dashboard" (Personalizado, Drag-and-Drop, Auto-Save e Assistência Gideon)
+- **Agentes Responsáveis:** `backend`, `frontend`, `tester`, `planner`
+- **Tipo:** `feat` / `test`
+- **Contexto & Motivação:**
+  Usuários de perfis ADMIN e GERENTE demandavam a capacidade de criar dashboards analíticos personalizados estilo Notion/WordPress/Excel, gerando gráficos sob demanda com apoio da IA Gideon via linguagem natural, organizando cards livremente através de drag-and-drop e persistindo layouts individualizados no PostgreSQL local.
+- **Implementações Realizadas:**
+  1. **Modelagem Prisma (`schema.prisma`):**
+     * Criação das entidades `UserDashboard` (`user_dashboards`) e `DashboardWidget` (`dashboard_widgets`) com chave estrangeira em cascata para `Usuario`.
+     * Atributos de layout responsivo persistidos: `col_span` (1, 2, 3 correspondendo a tamanhos P/M/G), `row_span` (1, 2 para altura expandida), `order`, `query_prompt`, `sql_query`, `cached_data` e `type` (`bar`, `horizontal-bar`, `line`, `area`, `pie`, `table`).
+     * Sincronização executada via `prisma db push` e `prisma generate`.
+  2. **Serviço e API Backend (`user-dashboard.service.ts` e `api.ts`):**
+     * `getOrCreateDashboard(userId)`: Recupera ou inicializa o dashboard único do usuário logado.
+     * `generateAndAddWidget(userId, prompt)`: Conecta ao pipeline RAG determinístico, infere tipo visual ideal pela Matriz Heurística e persiste o novo widget no grid.
+     * `updateLayout(userId, items)`: Auto-save atômico em lote com isolamento estrito multi-tenant (RBAC).
+     * `refreshWidget(userId, widgetId)`: Reexecuta queries em transação PostgreSQL read-only com `statement_timeout = '3000ms'` e sanitização LGPD.
+     * `removeWidget(userId, widgetId)`: Exclusão com proteção RBAC.
+  3. **Interface Frontend (`UserDashboard.tsx` & `App.tsx`):**
+     * Adicionada a aba "Seu Dashboard" com ícone `LayoutDashboard` acessível para ambos os papéis `ADMIN` e `GERENTE`.
+     * Grid fluido `grid-cols-1 md:grid-cols-2 lg:grid-cols-3` com suporte nativo a drag-and-drop HTML5, botões táteis de reordenação e redimensionamento dinâmico P/M/G.
+     * Barra de comando compacta com atalhos de 1 toque, geração assíncrona com IA Gideon e onboarding inicial didático com 3 indicadores pré-configurados.
+     * Auto-save debounced em 600ms com persistência híbrida PostgreSQL e fallback local (`localStorage`) para zero latência e resiliência offline.
+     * Refatoração retrocompatível em `DynamicDashboard.tsx` para suporte a cards embutidos sem cabeçalhos duplicados e exportação do utilitário `parseDashboardConfig`.
+  4. **Garantia de Qualidade & Testes Automatizados (`user-dashboard.service.test.ts` e `user-dashboard.test.ts`):**
+     * 30 novos testes automatizados cobrindo isolamento multi-tenant RBAC (403), auto-save de layout e sanitização estrita anti-SQLi (bloqueio DDL/DML, stacked queries, proteção de tabelas internas).
+     * Suíte completa com **70 testes passando com 100% de sucesso** em ~333ms e zero erros no TypeScript.
+- **Arquivos Impactados:**
+  - `backend/prisma/schema.prisma`
+  - `backend/src/services/user-dashboard.service.ts`
+  - `backend/src/routes/api.ts`
+  - `backend/src/__tests__/user-dashboard.service.test.ts`
+  - `backend/src/__tests__/user-dashboard.test.ts`
+  - `frontend/src/pages/UserDashboard.tsx`
+  - `frontend/src/components/chat/DynamicDashboard.tsx`
+  - `frontend/src/App.tsx`
+  - `MEMORY_PALACE.md`

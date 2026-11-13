@@ -34,8 +34,10 @@ export interface DashboardData {
 	data: Array<Record<string, unknown>>;
 }
 
-interface DynamicDashboardProps {
+export interface DynamicDashboardProps {
 	configString: string;
+	hideHeader?: boolean;
+	className?: string;
 }
 
 const PALETTE = [
@@ -157,83 +159,92 @@ function truncateLabel(label: unknown, maxLength = 16): string {
 	return `${str.slice(0, maxLength - 1)}…`;
 }
 
-export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ configString }) => {
+export function parseDashboardConfig(configString: string): {
+	status: 'empty' | 'streaming' | 'invalid' | 'ready';
+	config: DashboardData | null;
+} {
+	let rawContent = String(configString ?? '').trim();
+
+	// Remove cercas markdown ```dashboard ou ```json residuais
+	rawContent = rawContent
+		.replace(/^```(?:dashboard|json)?\s*/i, '')
+		.replace(/\s*```$/i, '')
+		.trim();
+
+	if (!rawContent) {
+		return { status: 'empty', config: null };
+	}
+
+	// Extrai com precisão o bloco JSON delimitado por chaves {}
+	const firstBrace = rawContent.indexOf('{');
+	const lastBrace = rawContent.lastIndexOf('}');
+
+	if (firstBrace === -1) {
+		return { status: 'streaming', config: null };
+	}
+
+	const isLikelyStreaming = lastBrace === -1 || lastBrace <= firstBrace;
+	const jsonCandidate = !isLikelyStreaming ? rawContent.slice(firstBrace, lastBrace + 1) : rawContent.slice(firstBrace);
+
+	try {
+		const raw = JSON.parse(jsonCandidate) as Partial<DashboardData>;
+		if (!raw || typeof raw !== 'object') {
+			return { status: 'invalid', config: null };
+		}
+
+		const rawData = Array.isArray(raw.data) ? raw.data : [];
+		const validRows = rawData
+			.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+			.map((row) => {
+				const normalizedRow: Record<string, unknown> = {};
+				for (const [k, v] of Object.entries(row)) {
+					if (!ID_OR_CODE_KEY_REGEX.test(String(k).trim()) && typeof v === 'string') {
+						const parsedNum = parseNumericValue(v);
+						normalizedRow[k] = parsedNum !== null ? parsedNum : v;
+					} else {
+						normalizedRow[k] = v;
+					}
+				}
+				return normalizedRow;
+			});
+
+		const validType: DashboardData['type'] =
+			raw.type === 'bar' ||
+			raw.type === 'horizontal-bar' ||
+			raw.type === 'line' ||
+			raw.type === 'area' ||
+			raw.type === 'pie' ||
+			raw.type === 'table'
+				? raw.type
+				: 'table';
+
+		return {
+			status: 'ready',
+			config: {
+				type: validType,
+				title: typeof raw.title === 'string' ? raw.title : undefined,
+				data: validRows,
+			},
+		};
+	} catch {
+		return {
+			status: isLikelyStreaming ? 'streaming' : 'invalid',
+			config: null,
+		};
+	}
+}
+
+export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({
+	configString,
+	hideHeader = false,
+	className,
+}) => {
 	const rawId = useId();
 	const gradientId = useMemo(() => `grad-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`, [rawId]);
 	// 'auto' usa Cards no mobile (< sm) e Tabela no desktop (>= sm) para type === 'table'
 	const [tableLayout, setTableLayout] = useState<'auto' | 'cards' | 'table'>('auto');
 
-	const parsedResult = useMemo(() => {
-		let rawContent = String(configString ?? '').trim();
-
-		// Remove cercas markdown ```dashboard ou ```json residuais
-		rawContent = rawContent
-			.replace(/^```(?:dashboard|json)?\s*/i, '')
-			.replace(/\s*```$/i, '')
-			.trim();
-
-		if (!rawContent) {
-			return { status: 'empty' as const, config: null };
-		}
-
-		// Extrai com precisão o bloco JSON delimitado por chaves {}
-		const firstBrace = rawContent.indexOf('{');
-		const lastBrace = rawContent.lastIndexOf('}');
-
-		if (firstBrace === -1) {
-			return { status: 'streaming' as const, config: null };
-		}
-
-		const isLikelyStreaming = lastBrace === -1 || lastBrace <= firstBrace;
-		const jsonCandidate = !isLikelyStreaming ? rawContent.slice(firstBrace, lastBrace + 1) : rawContent.slice(firstBrace);
-
-		try {
-			const raw = JSON.parse(jsonCandidate) as Partial<DashboardData>;
-			if (!raw || typeof raw !== 'object') {
-				return { status: 'invalid' as const, config: null };
-			}
-
-			const rawData = Array.isArray(raw.data) ? raw.data : [];
-			const validRows = rawData
-				.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-				.map((row) => {
-					const normalizedRow: Record<string, unknown> = {};
-					for (const [k, v] of Object.entries(row)) {
-						if (!ID_OR_CODE_KEY_REGEX.test(String(k).trim()) && typeof v === 'string') {
-							const parsedNum = parseNumericValue(v);
-							normalizedRow[k] = parsedNum !== null ? parsedNum : v;
-						} else {
-							normalizedRow[k] = v;
-						}
-					}
-					return normalizedRow;
-				});
-
-			const validType: DashboardData['type'] =
-				raw.type === 'bar' ||
-				raw.type === 'horizontal-bar' ||
-				raw.type === 'line' ||
-				raw.type === 'area' ||
-				raw.type === 'pie' ||
-				raw.type === 'table'
-					? raw.type
-					: 'table';
-
-			return {
-				status: 'ready' as const,
-				config: {
-					type: validType,
-					title: typeof raw.title === 'string' ? raw.title : undefined,
-					data: validRows,
-				},
-			};
-		} catch {
-			return {
-				status: isLikelyStreaming ? ('streaming' as const) : ('invalid' as const),
-				config: null,
-			};
-		}
-	}, [configString]);
+	const parsedResult = useMemo(() => parseDashboardConfig(configString), [configString]);
 
 	if (parsedResult.status === 'empty') {
 		return null;
@@ -431,24 +442,67 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 	);
 
 	return (
-		<div className="my-3.5 w-full overflow-hidden rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-sm transition hover:shadow-md sm:p-4">
-			<div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
-				<div className="flex min-w-0 items-center gap-2">
-					{type === 'bar' && <BarChart3 className="h-4 w-4 shrink-0 text-indigo-600" />}
-					{type === 'horizontal-bar' && <BarChartHorizontal className="h-4 w-4 shrink-0 text-indigo-600" />}
-					{type === 'line' && <TrendingUp className="h-4 w-4 shrink-0 text-emerald-600" />}
-					{type === 'area' && <LucideAreaChart className="h-4 w-4 shrink-0 text-indigo-600" />}
-					{type === 'pie' && <PieIcon className="h-4 w-4 shrink-0 text-amber-600" />}
-					{type === 'table' && <TableIcon className="h-4 w-4 shrink-0 text-sky-600" />}
-					<h3 className="truncate text-xs font-semibold text-slate-800 sm:text-sm">
-						{title || 'Indicadores Sankhya ERP'}
-					</h3>
-					<span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-						{data.length} {data.length === 1 ? 'item' : 'itens'}
-					</span>
-				</div>
+		<div
+			className={
+				className
+					? className
+					: 'my-3.5 w-full overflow-hidden rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-sm transition hover:shadow-md sm:p-4'
+			}
+		>
+			{!hideHeader ? (
+				<div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+					<div className="flex min-w-0 items-center gap-2">
+						{type === 'bar' && <BarChart3 className="h-4 w-4 shrink-0 text-indigo-600" />}
+						{type === 'horizontal-bar' && <BarChartHorizontal className="h-4 w-4 shrink-0 text-indigo-600" />}
+						{type === 'line' && <TrendingUp className="h-4 w-4 shrink-0 text-emerald-600" />}
+						{type === 'area' && <LucideAreaChart className="h-4 w-4 shrink-0 text-indigo-600" />}
+						{type === 'pie' && <PieIcon className="h-4 w-4 shrink-0 text-amber-600" />}
+						{type === 'table' && <TableIcon className="h-4 w-4 shrink-0 text-sky-600" />}
+						<h3 className="truncate text-xs font-semibold text-slate-800 sm:text-sm">
+							{title || 'Indicadores Sankhya ERP'}
+						</h3>
+						<span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+							{data.length} {data.length === 1 ? 'item' : 'itens'}
+						</span>
+					</div>
 
-				{type === 'table' && (
+					{type === 'table' && (
+						<div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
+							<button
+								type="button"
+								onClick={() => setTableLayout('cards')}
+								className={`inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium transition ${
+									tableLayout === 'cards'
+										? 'bg-white text-indigo-600 shadow-sm'
+										: tableLayout === 'auto'
+											? 'bg-white text-indigo-600 shadow-sm sm:bg-transparent sm:text-slate-600 sm:shadow-none'
+											: 'text-slate-600 hover:text-slate-900'
+								}`}
+								title="Visualização em Cartões Compactos (ideal para celular)"
+							>
+								<LayoutGrid className="h-3 w-3" />
+								<span>Cards</span>
+							</button>
+							<button
+								type="button"
+								onClick={() => setTableLayout('table')}
+								className={`inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium transition ${
+									tableLayout === 'table'
+										? 'bg-white text-indigo-600 shadow-sm'
+										: tableLayout === 'auto'
+											? 'text-slate-600 sm:bg-white sm:text-indigo-600 sm:shadow-sm'
+											: 'text-slate-600 hover:text-slate-900'
+								}`}
+								title="Visualização em Tabela com colunas completas"
+							>
+								<TableIcon className="h-3 w-3" />
+								<span>Tabela</span>
+							</button>
+						</div>
+					)}
+				</div>
+			) : type === 'table' ? (
+				<div className="mb-2 flex items-center justify-end">
 					<div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
 						<button
 							type="button"
@@ -481,8 +535,8 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({ c
 							<span>Tabela</span>
 						</button>
 					</div>
-				)}
-			</div>
+				</div>
+			) : null}
 
 			{type === 'table' && (
 				<>

@@ -5,10 +5,11 @@ import AdminERP from './pages/AdminERP';
 import AdminUsers from './pages/AdminUsers';
 import Chat from './pages/Chat';
 import Login from './pages/Login';
+import UserDashboard from './pages/UserDashboard';
 import ProtectedRoute from './components/ProtectedRoute';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { Bot, Database, LogOut, MessageSquare, Shield, User as UserIcon, Users as UsersIcon } from 'lucide-react';
+import { Bot, Database, LayoutDashboard, LogOut, MessageSquare, Shield, User as UserIcon, Users as UsersIcon } from 'lucide-react';
 
 const navigationClass = ({ isActive }: { isActive: boolean }) => (
 	`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs sm:text-sm font-medium transition ${
@@ -44,27 +45,33 @@ function NavigationHeader() {
 					</div>
 				</div>
 
-				{/* Menus de navegação apenas para Administradores. Gerentes apenas visualizam o Chat! */}
-				{user.role === 'ADMIN' && (
-					<div className="flex items-center gap-1 border-l border-slate-200 pl-3">
-						<NavLink className={navigationClass} to="/">
-							<MessageSquare className="h-4 w-4 text-indigo-600" />
-							<span>Chat</span>
-						</NavLink>
-						<NavLink className={navigationClass} to="/admin/erp">
-							<Database className="h-4 w-4 text-emerald-600" />
-							<span className="hidden md:inline">Integrações</span> ERP
-						</NavLink>
-						<NavLink className={navigationClass} to="/admin/ai">
-							<Bot className="h-4 w-4 text-violet-600" />
-							<span className="hidden md:inline">Configurações</span> IA
-						</NavLink>
-						<NavLink className={navigationClass} to="/admin/users">
-							<UsersIcon className="h-4 w-4 text-sky-600" />
-							<span>Usuários</span>
-						</NavLink>
-					</div>
-				)}
+				{/* Menus de navegação: Chat e Seu Dashboard para Administradores e Gerentes */}
+				<div className="flex items-center gap-1 border-l border-slate-200 pl-3">
+					<NavLink className={navigationClass} to="/">
+						<MessageSquare className="h-4 w-4 text-indigo-600" />
+						<span>Chat</span>
+					</NavLink>
+					<NavLink className={navigationClass} to="/dashboard">
+						<LayoutDashboard className="h-4 w-4 text-amber-500" />
+						<span>Seu Dashboard</span>
+					</NavLink>
+					{user.role === 'ADMIN' && (
+						<>
+							<NavLink className={navigationClass} to="/admin/erp">
+								<Database className="h-4 w-4 text-emerald-600" />
+								<span className="hidden md:inline">Integrações</span> ERP
+							</NavLink>
+							<NavLink className={navigationClass} to="/admin/ai">
+								<Bot className="h-4 w-4 text-violet-600" />
+								<span className="hidden md:inline">Configurações</span> IA
+							</NavLink>
+							<NavLink className={navigationClass} to="/admin/users">
+								<UsersIcon className="h-4 w-4 text-sky-600" />
+								<span>Usuários</span>
+							</NavLink>
+						</>
+					)}
+				</div>
 			</div>
 
 			<div className="flex items-center gap-2.5 sm:gap-3">
@@ -111,6 +118,14 @@ export default function App() {
 									element={
 										<ProtectedRoute>
 											<Chat />
+										</ProtectedRoute>
+									}
+								/>
+								<Route
+									path="/dashboard"
+									element={
+										<ProtectedRoute>
+											<UserDashboard />
 										</ProtectedRoute>
 									}
 								/>

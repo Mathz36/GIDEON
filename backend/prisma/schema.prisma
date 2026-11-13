@@ -87,16 +87,48 @@ model MetaColumn {
 }
 
 model Usuario {
-  id              String   @id @default(uuid())
+  id              String          @id @default(uuid())
   nome            String
-  email           String   @unique
-  senha_hash      String   @map("senha_hash")
-  usuario_erp     String   @map("usuario_erp")
-  cod_gerente_erp String   @map("cod_gerente_erp")
-  tipo_acesso     String   @default("GERENTE") @map("tipo_acesso") // ADMIN | GERENTE
-  criado_em       DateTime @default(now()) @map("criado_em")
-  atualizado_em   DateTime @updatedAt @map("atualizado_em")
+  email           String          @unique
+  senha_hash      String          @map("senha_hash")
+  usuario_erp     String          @map("usuario_erp")
+  cod_gerente_erp String          @map("cod_gerente_erp")
+  tipo_acesso     String          @default("GERENTE") @map("tipo_acesso") // ADMIN | GERENTE
+  criado_em       DateTime        @default(now()) @map("criado_em")
+  atualizado_em   DateTime        @updatedAt @map("atualizado_em")
+  dashboards      UserDashboard[]
 
   @@map("usuarios")
 }
+
+model UserDashboard {
+  id          String            @id @default(uuid())
+  userId      String            @map("user_id")
+  title       String            @default("Meu Dashboard")
+  widgets     DashboardWidget[]
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  usuario     Usuario           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("user_dashboards")
+}
+
+model DashboardWidget {
+  id              String        @id @default(uuid())
+  dashboardId     String        @map("dashboard_id")
+  title           String
+  type            String        // 'bar' | 'horizontal-bar' | 'line' | 'area' | 'pie' | 'table'
+  queryPrompt     String        @db.Text
+  sqlQuery        String?       @db.Text
+  cachedData      Json?
+  colSpan         Int           @default(1) @map("col_span") // 1 (1 col), 2 (2 cols), 3 (3 cols / largura total)
+  rowSpan         Int           @default(1) @map("row_span") // 1 (padrão), 2 (expandido)
+  order           Int           @default(0)
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  dashboard       UserDashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  @@map("dashboard_widgets")
+}
+
 
