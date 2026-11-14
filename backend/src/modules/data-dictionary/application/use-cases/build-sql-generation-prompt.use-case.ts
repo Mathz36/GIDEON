@@ -37,7 +37,11 @@ REGRAS ESTRITAS DE ENGENHARIA DE PROMPT E SEGURANÇA SQL:
 4. RELACIONAMENTOS E JOINS (FK): Sempre que a consulta exigir cruzar informações entre mais de uma tabela, utilize OBRIGATORIAMENTE os caminhos de JOIN documentados nas Foreign Keys e na seção 'RELACIONAMENTOS E CAMINHOS DE JOIN IDENTIFICADOS'.
 5. STATUS E FILTROS DE NEGÓCIO: Preste atenção às descrições semânticas das colunas para aplicar filtros de status (ex: para vendas confirmadas/faturamento, atente para STATUS 'L' = Liberada ou TIPMOV 'V' = Venda; NUNCA filtre por cancelamento a menos que explicitamente solicitado pelo usuário).
 6. TIPAGEM E AGREGAÇÕES MONETÁRIAS: Toda soma de valores monetários ou quantidades deve converter com CAST(coluna AS NUMERIC) (ex: SUM(CAST(vlrnota AS NUMERIC))). Datas devem ser convertidas com CAST(coluna AS TIMESTAMP) ou CAST(coluna AS DATE).
-7. RESPOSTA: Retorne APENAS o bloco SQL limpo e executável dentro de \`\`\`sql ... \`\`\`. Não adicione saudações ou textos desnecessários.`;
+7. ENGENHARIA DE EIXOS (X E Y) E GRANULARIDADE TEMPORAL:
+   - EVOLUÇÃO TEMPORAL ("evolução", "por dia", "diária", "ao longo do mês", "mês a mês", "histórico"): A 1ª coluna do SELECT (Eixo X) DEVE OBRIGATORIAMENTE ser o agrupamento temporal (ex: TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'DD/MM') AS dia para evolução diária, ou TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'MM/YYYY') AS mes para evolução mensal), ordenado cronologicamente com ORDER BY MIN(CAST(data_emissao AS TIMESTAMP)) ASC. É ESTRITAMENTE PROIBIDO colocar nota_fiscal, id, pedido ou código no Eixo X de evolução temporal ou apelidá-los como "AS dia".
+   - RANKINGS E CATEGORIAS ("por cliente", "por produto", "por vendedor", "por grupo"): A 1ª coluna do SELECT (Eixo X) deve ser o nome descritivo legível (ex: razaosocial, descricao_produto, representante_nome, grupo_de_produtos), fazendo INNER JOIN se necessário, NUNCA apenas o código numérico isolado.
+   - EIXO Y (MÉTRICA CORRETA): Quando o pedido for faturamento, vendas financeiras, valor ou receita, use SUM(CAST(valor_liquido AS NUMERIC)) AS faturamento_total (ou valor_bruto). NUNCA some quantidade (SUM(quantidade)) apelidando de faturamento_total ou valor.
+8. RESPOSTA: Retorne APENAS o bloco SQL limpo e executável dentro de \`\`\`sql ... \`\`\`. Não adicione saudações ou textos desnecessários.`;
 
 		// 4. Monta o User Prompt com a pergunta e o esquema injetado
 		const userPrompt = `### ESQUEMA DO BANCO DE DADOS (${dialect.toUpperCase()}):

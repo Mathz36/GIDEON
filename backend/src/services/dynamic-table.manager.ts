@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { PrismaClient, ErpConfiguration } from '@prisma/client';
 import prismaClient from '../config/prisma';
 import SankhyaService, { SankhyaRow } from './sankhya.service';
+import { mergeExpectedFieldsWithQueryAliases } from '../utils/sql-alias-extractor';
 
 export interface ISankhyaGateway {
 	executeQuery(query: string, expectedFields: string[]): Promise<Array<Record<string, any>>>;
@@ -198,9 +199,10 @@ export class DynamicTableManager implements IDynamicTableManager {
 
 		const safeTableName = this.generateTableName(config.tableName);
 		const sanitizedPk = this.sanitizeColumnName(config.primaryKey);
+		const effectiveFields = mergeExpectedFieldsWithQueryAliases(config.query, config.expectedFields);
 
 		// 1. Assegura a existência da tabela, coluna _row_hash e índice único da PK no PostgreSQL
-		await this.syncColumns(safeTableName, config.expectedFields, config.primaryKey);
+		await this.syncColumns(safeTableName, effectiveFields, config.primaryKey);
 
 		// Detecta se a query do usuário utiliza as macros {{LAST_CURSOR}} ou {{LAST_SYNC_DATE}}
 		const hasCursorMacro = /\{\{\s*LAST_CURSOR\s*\}\}/i.test(config.query);
@@ -241,7 +243,7 @@ export class DynamicTableManager implements IDynamicTableManager {
 			}
 
 			// 3. Executa consulta no Sankhya
-			const rows = await this.sankhyaGateway.executeQuery(pagedQuery, config.expectedFields);
+			const rows = await this.sankhyaGateway.executeQuery(pagedQuery, effectiveFields);
 			const rowCount = rows?.length ?? 0;
 
 			if (rowCount === 0) {
@@ -444,8 +446,10 @@ export class DynamicTableManager implements IDynamicTableManager {
 
 		console.info(`[DynamicTableManager] Iniciando sincronização COMPLETA PAGINADA (Full Load) para "${config.tableName}" (batchSize: ${batchSize})...`);
 
+		const effectiveFields = mergeExpectedFieldsWithQueryAliases(config.query, config.expectedFields);
+
 		// 1. Assegura a estrutura da tabela
-		await this.syncColumns(safeTableName, config.expectedFields, config.primaryKey);
+		await this.syncColumns(safeTableName, effectiveFields, config.primaryKey);
 
 		// 2. Executa TRUNCATE TABLE no Postgres
 		await this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "${safeTableName}";`);
@@ -478,7 +482,7 @@ export class DynamicTableManager implements IDynamicTableManager {
 
 			console.info(`[DynamicTableManager] [FullSync Lote #${batchIndex}] Buscando até ${batchSize} registros (Offset: ${offset}, Cursor: ${currentCursor})...`);
 
-			const rows = await this.sankhyaGateway.executeQuery(pagedQuery, config.expectedFields);
+			const rows = await this.sankhyaGateway.executeQuery(pagedQuery, effectiveFields);
 			const rowCount = rows?.length ?? 0;
 
 			if (rowCount === 0) {

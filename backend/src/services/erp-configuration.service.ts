@@ -2,7 +2,8 @@ import { PrismaClient, ErpConfiguration as PrismaErpConfig } from '@prisma/clien
 import prismaClient from '../config/prisma';
 import dynamicTableManager, { IDynamicTableManager } from './dynamic-table.manager';
 import erpSyncScheduler, { IErpSyncScheduler, SyncResult } from './erp-sync.scheduler';
-import { saveTableMetadataUseCase, metaTableRepository } from '../modules/data-dictionary';
+import { saveTableMetadataUseCase, metaTableRepository, autoDetectRelationshipsUseCase } from '../modules/data-dictionary';
+import { mergeExpectedFieldsWithQueryAliases } from '../utils/sql-alias-extractor';
 
 export type SyncFrequency = 'MINUTES' | 'HOURS' | 'DAILY' | 'MONTHLY' | 'MANUAL';
 
@@ -64,9 +65,10 @@ export class ErpConfigurationService implements IErpConfigurationService {
 		const tableName = this.tableManager.generateTableName(input.context);
 
 		const primaryKey = input.primaryKey?.trim() || null;
+		const effectiveExpectedFields = mergeExpectedFieldsWithQueryAliases(input.query, input.expectedFields);
 
 		// 1. Cria a tabela dinâmica no banco com as colunas definidas em expectedFields e índice na PK
-		await this.tableManager.createTable(tableName, input.expectedFields, primaryKey);
+		await this.tableManager.createTable(tableName, effectiveExpectedFields, primaryKey);
 
 		const syncStrategy = input.syncStrategy ?? 'FULL';
 		const lastSyncCursor = input.lastSyncCursor?.trim() || null;
@@ -95,7 +97,7 @@ export class ErpConfigurationService implements IErpConfigurationService {
 				context: input.context.trim(),
 				description: input.description.trim(),
 				query: input.query.trim(),
-				expectedFields: input.expectedFields.map((f) => f.trim()).filter(Boolean),
+				expectedFields: effectiveExpectedFields,
 				tableName,
 				primaryKey,
 				syncStrategy,
@@ -126,6 +128,7 @@ export class ErpConfigurationService implements IErpConfigurationService {
 						isPrimaryKey: field.toUpperCase() === primaryKey.toUpperCase(),
 					})),
 				});
+				await autoDetectRelationshipsUseCase.execute('default');
 			} catch (err) {
 				console.warn('[ErpConfigurationService] Aviso ao registrar no dicionário de dados:', err);
 			}
@@ -141,9 +144,10 @@ export class ErpConfigurationService implements IErpConfigurationService {
 		}
 
 		const primaryKey = input.primaryKey !== undefined ? (input.primaryKey?.trim() || null) : existing.primaryKey;
+		const effectiveExpectedFields = mergeExpectedFieldsWithQueryAliases(input.query, input.expectedFields);
 
 		// Garante a existência da tabela e adiciona novas colunas caso haja novos campos
-		await this.tableManager.syncColumns(existing.tableName, input.expectedFields, primaryKey);
+		await this.tableManager.syncColumns(existing.tableName, effectiveExpectedFields, primaryKey);
 
 		const syncStrategy = input.syncStrategy ?? existing.syncStrategy ?? 'FULL';
 		const lastSyncCursor = input.lastSyncCursor !== undefined ? (input.lastSyncCursor?.trim() || null) : existing.lastSyncCursor;
@@ -171,7 +175,7 @@ export class ErpConfigurationService implements IErpConfigurationService {
 				context: input.context.trim(),
 				description: input.description.trim(),
 				query: input.query.trim(),
-				expectedFields: input.expectedFields.map((f) => f.trim()).filter(Boolean),
+				expectedFields: effectiveExpectedFields,
 				primaryKey,
 				syncStrategy,
 				lastSyncCursor,
@@ -201,6 +205,7 @@ export class ErpConfigurationService implements IErpConfigurationService {
 						isPrimaryKey: field.toUpperCase() === primaryKey.toUpperCase(),
 					})),
 				});
+				await autoDetectRelationshipsUseCase.execute('default');
 			} catch (err) {
 				console.warn('[ErpConfigurationService] Aviso ao atualizar no dicionário de dados:', err);
 			}
@@ -247,6 +252,34 @@ export class ErpConfigurationService implements IErpConfigurationService {
 	}
 
 	async syncNow(id: string): Promise<SyncResult> {
+		const existing = await this.getById(id);
+		if (existing) {
+			const effectiveFields = mergeExpectedFieldsWithQueryAliases(existing.query, existing.expectedFields);
+			if (effectiveFields.length > existing.expectedFields.length) {
+				await this.prisma.erpConfiguration.update({
+					where: { id },
+					data: { expectedFields: effectiveFields },
+				});
+				if (existing.primaryKey) {
+					try {
+						await saveTableMetadataUseCase.execute({
+							tenantId: 'default',
+							tableName: existing.tableName,
+							description: existing.description || `Tabela dinâmica para o contexto ${existing.context}`,
+							columns: effectiveFields.map((field) => ({
+								columnName: field,
+								dataType: 'TEXT',
+								description: this.generateColumnDescription(field, existing.primaryKey, existing.context),
+								isPrimaryKey: field.toUpperCase() === existing.primaryKey!.toUpperCase(),
+							})),
+						});
+						await autoDetectRelationshipsUseCase.execute('default');
+					} catch (err) {
+						console.warn('[ErpConfigurationService] Aviso ao sincronizar dicionário de dados em syncNow:', err);
+					}
+				}
+			}
+		}
 		return this.scheduler.syncNow(id);
 	}
 }

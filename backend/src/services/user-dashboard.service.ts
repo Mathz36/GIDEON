@@ -1,6 +1,11 @@
 import prismaClient from '../config/prisma';
 import GeminiService from './gemini.service';
 import chatRagService from './chat-rag.service';
+import {
+	selectSmartAxes,
+	formatSmartAxisLabel,
+	parseRowNumericValue,
+} from '../utils/smart-axis-selector';
 
 export type WidgetType = 'bar' | 'horizontal-bar' | 'line' | 'area' | 'pie' | 'table';
 
@@ -288,7 +293,7 @@ export class UserDashboardService {
 
 		// Formata dados preservando a consistência com o tipo de visualização
 		const widgetType = widget.type as WidgetType;
-		const formattedData = this.formatDataForWidgetType(widgetType, sanitizedRows);
+		const formattedData = this.formatDataForWidgetType(widgetType, sanitizedRows, widget.title);
 
 		const updatedCachedData: DashboardWidgetPayload = {
 			type: widgetType,
@@ -386,16 +391,23 @@ ${JSON.stringify(sampleRows, (_k, v) => (typeof v === 'bigint' ? v.toString() : 
 				const rawType = typeof parsed.type === 'string' ? parsed.type.trim().toLowerCase() : '';
 				const validTypes: WidgetType[] = ['bar', 'horizontal-bar', 'line', 'area', 'pie', 'table'];
 
-				if (validTypes.includes(rawType as WidgetType) && Array.isArray(parsed.data) && parsed.data.length > 0) {
+				if (validTypes.includes(rawType as WidgetType)) {
+					const resolvedType = rawType as WidgetType;
 					const sanitizedTitle =
 						typeof parsed.title === 'string' && parsed.title.trim()
 							? parsed.title.trim()
 							: this.generateDefaultTitle(prompt);
 
+					const formattedData = this.formatDataForWidgetType(
+						resolvedType,
+						rows,
+						`${prompt} ${sanitizedTitle}`,
+					);
+
 					return {
-						type: rawType as WidgetType,
+						type: resolvedType,
 						title: sanitizedTitle,
-						data: parsed.data,
+						data: formattedData,
 					};
 				}
 			}
@@ -433,7 +445,7 @@ ${JSON.stringify(sampleRows, (_k, v) => (typeof v === 'bigint' ? v.toString() : 
 		);
 
 		if (hasTimeKey || isTimePrompt) {
-			const chartData = this.formatDataForWidgetType('line', rows);
+			const chartData = this.formatDataForWidgetType('line', rows, prompt);
 			return { type: 'line', title, data: chartData };
 		}
 
@@ -442,7 +454,7 @@ ${JSON.stringify(sampleRows, (_k, v) => (typeof v === 'bigint' ? v.toString() : 
 			lowerPrompt,
 		);
 		if (isRankingPrompt) {
-			const chartData = this.formatDataForWidgetType('horizontal-bar', rows);
+			const chartData = this.formatDataForWidgetType('horizontal-bar', rows, prompt);
 			return { type: 'horizontal-bar', title, data: chartData };
 		}
 
@@ -456,13 +468,13 @@ ${JSON.stringify(sampleRows, (_k, v) => (typeof v === 'bigint' ? v.toString() : 
 			lowerPrompt,
 		);
 		if (isCompositionPrompt && rows.length <= 5) {
-			const chartData = this.formatDataForWidgetType('pie', rows);
+			const chartData = this.formatDataForWidgetType('pie', rows, prompt);
 			return { type: 'pie', title, data: chartData };
 		}
 
 		// Comparações diretas (< 7 categorias) -> bar ou horizontal-bar
 		if (rows.length <= 6) {
-			const chartData = this.formatDataForWidgetType('bar', rows);
+			const chartData = this.formatDataForWidgetType('bar', rows, prompt);
 			return { type: 'bar', title, data: chartData };
 		}
 
@@ -471,9 +483,15 @@ ${JSON.stringify(sampleRows, (_k, v) => (typeof v === 'bigint' ? v.toString() : 
 	}
 
 	/**
-	 * Formata linhas retornadas do banco para a estrutura exigida pelo tipo de widget
+	 * Formata linhas retornadas do banco para a estrutura exigida pelo tipo de widget,
+	 * utilizando o SmartAxisSelector para escolher semanticamente o Eixo X (data ou nome descritivo)
+	 * e o Eixo Y (métrica financeira ou de quantidade), nunca usando códigos de nota/ID como métrica.
 	 */
-	private formatDataForWidgetType(type: WidgetType, rows: Record<string, unknown>[]): unknown {
+	public formatDataForWidgetType(
+		type: WidgetType,
+		rows: Record<string, unknown>[],
+		promptOrTitle?: string,
+	): unknown {
 		if (type === 'table') {
 			return rows;
 		}
@@ -484,50 +502,22 @@ ${JSON.stringify(sampleRows, (_k, v) => (typeof v === 'bigint' ? v.toString() : 
 
 		// Verifica se já possui o formato { name, value }
 		const first = rows[0];
-		if ('name' in first && 'value' in first) {
+		if ('name' in first && 'value' in first && Object.keys(first).length === 2) {
 			return rows.map((r) => {
-				const v = r.value;
-				let num = 0;
-				if (typeof v === 'number') num = v;
-				else if (v && typeof v === 'object' && typeof (v as any).toNumber === 'function') num = (v as any).toNumber();
-				else if (v && typeof v === 'object' && 'd' in v) {
-					const str = String((v as any).d?.join?.('') || '0');
-					num = Number(str) * ((v as any).s || 1);
-				} else {
-					num = Number(v) || 0;
-				}
+				const num = parseRowNumericValue(r.value) ?? 0;
 				return {
-					name: String(r.name ?? ''),
+					name: formatSmartAxisLabel(r.name, 'name'),
 					value: Number.isNaN(num) ? 0 : num,
 				};
 			});
 		}
 
-		// Detecta coluna de rótulo (texto) e coluna de valor (número)
-		const keys = Object.keys(first);
-		let labelKey = keys.find((k) => typeof first[k] === 'string') || keys[0];
-		let numericKey = keys.find((k) => typeof first[k] === 'number' || (!Number.isNaN(Number(first[k])) && k !== labelKey));
-
-		if (!numericKey) {
-			numericKey = keys[1] || keys[0];
-		}
+		const { labelKey, numericKey } = selectSmartAxes(rows, type, promptOrTitle);
 
 		return rows.map((row) => {
-			const rawVal = row[numericKey];
-			let numVal: number;
-			if (typeof rawVal === 'number') {
-				numVal = rawVal;
-			} else if (rawVal && typeof rawVal === 'object' && typeof (rawVal as any).toNumber === 'function') {
-				numVal = (rawVal as any).toNumber();
-			} else if (rawVal && typeof rawVal === 'object' && 'd' in rawVal) {
-				const str = String((rawVal as any).d?.join?.('') || '0');
-				numVal = Number(str) * ((rawVal as any).s || 1);
-			} else {
-				numVal = Number(rawVal);
-			}
-
+			const numVal = parseRowNumericValue(row[numericKey]) ?? 0;
 			return {
-				name: String(row[labelKey] ?? 'Sem identificação'),
+				name: formatSmartAxisLabel(row[labelKey], labelKey),
 				value: Number.isNaN(numVal) ? 0 : numVal,
 			};
 		});

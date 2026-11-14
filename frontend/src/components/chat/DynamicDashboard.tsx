@@ -51,19 +51,22 @@ const PALETTE = [
 	'#f97316', // orange-500
 ];
 
-const CURRENCY_KEY_REGEX = /(valor|vlr|faturamento|receita|total|preco|preço|limite|custo|ticket|saldo|lucro|desconto|r\$)/i;
-const ID_OR_CODE_KEY_REGEX = /^(id|cod|codigo|código|num|nro|numero|número|nota|pedido|cpf|cnpj|cep|ano)/i;
+const CURRENCY_KEY_REGEX = /(valor|vlr|faturamento|receita|liquido|líquido|bruto|preco|preço|limite|custo|ticket|saldo|lucro|desconto|r\$)/i;
+const QUANTITY_KEY_REGEX = /(quantidade|qtd|volume|peso|itens|unidades|contagem|count)/i;
+const ID_OR_CODE_KEY_REGEX = /^(id|_id|cod|cod_.*|.*_id|codigo|código|num|nro|numero|número|nota|nota_fiscal|numero_nota|pedido|pedido_origem|num_pedido|cpf|cnpj|cep)$/i;
+const TIME_KEY_REGEX = /(^|_)(dia|data|data_emissao|dt|mes|mês|ano|periodo|período|semana|trimestre|date|month|year|day)($|_)/i;
+const DESCRIPTIVE_LABEL_KEY_REGEX = /(^|_)(name|nome|label|categoria|razaosocial|razao_social|descricao|descrição|apelido|cliente|parceiro|produto|vendedor|representante|gerente|grupo|subgrupo|operacao|operação|cidade|bairro|uf|rede|ramo|classificacao|tipo|status)($|_)/i;
 
 function isCurrencyField(key?: unknown, title?: string): boolean {
 	if (!key) return false;
 	const str = String(key).trim();
-	if (ID_OR_CODE_KEY_REGEX.test(str)) {
+	if (ID_OR_CODE_KEY_REGEX.test(str) || QUANTITY_KEY_REGEX.test(str)) {
 		return false;
 	}
 	if (CURRENCY_KEY_REGEX.test(str)) {
 		return true;
 	}
-	if (title && CURRENCY_KEY_REGEX.test(title) && /^(value|val|y)$/i.test(str)) {
+	if (title && !QUANTITY_KEY_REGEX.test(title) && CURRENCY_KEY_REGEX.test(title) && /^(value|val|y|total)$/i.test(str)) {
 		return true;
 	}
 	return false;
@@ -182,9 +185,18 @@ function formatColumnLabel(key?: unknown): string {
 }
 
 function truncateLabel(label: unknown, maxLength = 16): string {
-	const str = String(label ?? '');
-	if (str.length <= maxLength) return str;
-	return `${str.slice(0, maxLength - 1)}…`;
+	const raw = String(label ?? '').trim();
+	// Formata automaticamente datas ISO 'YYYY-MM-DD HH:mm:ss' ou 'YYYY-MM-DD' para 'DD/MM' no eixo
+	const isoMatch = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s]\d{2}:\d{2}(?::\d{2})?.*)?$/.exec(raw);
+	if (isoMatch) {
+		return `${isoMatch[3]}/${isoMatch[2]}`;
+	}
+	const ymMatch = /^(\d{4})-(\d{2})$/.exec(raw);
+	if (ymMatch) {
+		return `${ymMatch[2]}/${ymMatch[1]}`;
+	}
+	if (raw.length <= maxLength) return raw;
+	return `${raw.slice(0, maxLength - 1)}…`;
 }
 
 export function parseDashboardConfig(configString: string): {
@@ -354,20 +366,31 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({
 
 	const sample = data[0] || {};
 
-	// Detecta a chave numérica principal para os eixos Y / fatias
+	// Detecta a chave numérica principal para os eixos Y / fatias (bloqueando IDs/códigos e datas)
 	const valueKey =
-		allKeys.find((k) => /^(value|valor|total|faturamento|quantidade|qtd|limite|saldo)$/i.test(k)) ||
-		allKeys.find((k) => !ID_OR_CODE_KEY_REGEX.test(k) && typeof sample[k] === 'number') ||
+		allKeys.find(
+			(k) =>
+				!ID_OR_CODE_KEY_REGEX.test(k) &&
+				!TIME_KEY_REGEX.test(k) &&
+				/(value|valor|vlr|total|faturamento|receita|liquido|líquido|bruto|quantidade|qtd|peso|volume|limite|saldo|lucro|preco|preço|ticket)/i.test(k),
+		) ||
+		allKeys.find((k) => !ID_OR_CODE_KEY_REGEX.test(k) && !TIME_KEY_REGEX.test(k) && typeof sample[k] === 'number') ||
 		allKeys.find((k) => typeof sample[k] === 'number') ||
 		allKeys[1] ||
 		allKeys[0] ||
 		'value';
 
-	// Detecta a chave de rótulo/categoria para o eixo X
+	// Detecta a chave de rótulo/categoria/tempo para o eixo X conforme o tipo do gráfico
+	const xCandidates = allKeys.filter((k) => k !== valueKey);
 	const nameKey =
-		allKeys.find((k) => /^(name|nome|label|categoria|cliente|parceiro|produto|mes|mês|periodo|período|vendedor|grupo|uf)$/i.test(k)) ||
-		allKeys.find((k) => k !== valueKey && typeof sample[k] === 'string') ||
-		allKeys.find((k) => k !== valueKey) ||
+		(type === 'line' || type === 'area'
+			? xCandidates.find((k) => TIME_KEY_REGEX.test(k) || k === 'name') ||
+				xCandidates.find((k) => DESCRIPTIVE_LABEL_KEY_REGEX.test(k))
+			: xCandidates.find((k) => DESCRIPTIVE_LABEL_KEY_REGEX.test(k)) ||
+				xCandidates.find((k) => TIME_KEY_REGEX.test(k))) ||
+		xCandidates.find((k) => !ID_OR_CODE_KEY_REGEX.test(k) && typeof sample[k] === 'string') ||
+		xCandidates.find((k) => typeof sample[k] === 'string') ||
+		xCandidates[0] ||
 		allKeys[0] ||
 		'name';
 

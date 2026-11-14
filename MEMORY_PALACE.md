@@ -376,3 +376,35 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/hooks/useChat.ts`
   - `frontend/src/pages/Chat.tsx`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Engenharia Semântica de Eixos para Gráficos, Granularidade Temporal no Text-to-SQL e Auto-Extração de Aliases SQL no ERP
+- **Agentes Responsáveis:** `planner`, `ai-specialist`, `backend`, `frontend`, `tester`
+- **Tipo:** `feat` / `fix` / `test`
+- **Contexto & Motivação:**
+  Em gráficos de evolução temporal (como *"Evolução do faturamento no mês de outubro por dia"*), o gráfico estava exibindo o número da Nota Fiscal (`124323`, `129196`...) no Eixo X em vez dos dias do mês (`01/10`, `02/10`...). O diagnóstico revelou duas causas-raiz:
+  1. A integração `NOTA_FISCAL` em `erp_configurations` possuía `DATA_EMISSAO`, `VALOR_LIQUIDO` e `VALOR_BRUTO` na query SQL do Sankhya, mas esses campos estavam ausentes no array `expectedFields`, fazendo com que a tabela `erp_nota_fiscal` no PostgreSQL fosse criada sem `data_emissao` e sem `valor_liquido`.
+  2. Ausência de guardrails de engenharia semântica de eixos no Text-to-SQL e no formatador de gráficos (`UserDashboardService` e `DynamicDashboard.tsx`).
+- **Implementações Realizadas:**
+  1. **Frente 1 — Auto-Extração de Aliases SQL e Sincronização Completa (`sql-alias-extractor.ts`, `dynamic-table.manager.ts`, `erp-configuration.service.ts`, `auto-detect-relationships.use-case.ts`):**
+     - Criado `extractSqlSelectAliases` e `mergeExpectedFieldsWithQueryAliases` para extrair automaticamente todos os aliases (`AS <COLUNA>`) da cláusula `SELECT` principal das integrações ERP, garantindo que nenhuma coluna da query seja omitida de `expectedFields`, da criação/alteração de tabela no PostgreSQL ou do Dicionário de Dados (`meta_columns`).
+     - Sincronizada a tabela `erp_nota_fiscal` com as 11 colunas (`id`, `operacao`, `nota_fiscal`, `pedido_origem`, `cod_vendedor`, `cod_cliente`, `empresa`, `tipo_movimento`, `valor_bruto`, `valor_liquido`, `data_emissao`) em 11.242 registros e detectadas automaticamente as FKs semânticas (`cod_cliente -> erp_clientes.cliente_id` e `cod_vendedor -> erp_vendedores.representante_id`).
+  2. **Frente 2 — Regras de Granularidade Temporal e Engenharia de Eixos no Text-to-SQL (`build-sql-generation-prompt.use-case.ts`, `chat-rag.service.ts`):**
+     - Injetadas diretrizes estritas obrigando que séries temporais diárias agrupem por `TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'DD/MM') AS dia` com ordenação cronológica `ORDER BY MIN(CAST(data_emissao AS TIMESTAMP)) ASC`, proibindo o uso de `nota_fiscal`, `id` ou `cod_*` no Eixo X de evolução temporal e exigindo `SUM(CAST(valor_liquido AS NUMERIC))` para faturamento financeiro.
+  3. **Frente 3 — Seletor Semântico de Eixos no Backend e Frontend (`smart-axis-selector.ts`, `user-dashboard.service.ts`, `DynamicDashboard.tsx`):**
+     - Criado `selectSmartAxes` e `formatSmartAxisLabel` para priorizar colunas temporais (`dia`, `data_emissao`, `mes`) em gráficos de linha/área, colunas descritivas (`razaosocial`, `descricao`, `nome`) em rankings/barras (acima de códigos `cod_*`) e formatar datas ISO (`2026-10-05 00:00:00` -> `05/10`) automaticamente.
+     - Atualizados os widgets existentes de evolução de outubro no banco com os dados diários reais (`01/10`, `02/10`, `05/10`...).
+  4. **Testes Automatizados (`smart-axis-and-sql-aliases.test.ts`):**
+     - Adicionados 5 novos testes unitários validando a extração de aliases SQL, seleção semântica de eixos X/Y, formatação de datas e regras de prompt. Suíte total com **82/82 testes passando (0 falhas)**.
+- **Arquivos Impactados:**
+  - `backend/src/utils/sql-alias-extractor.ts`
+  - `backend/src/utils/smart-axis-selector.ts`
+  - `backend/src/services/dynamic-table.manager.ts`
+  - `backend/src/services/erp-configuration.service.ts`
+  - `backend/src/services/user-dashboard.service.ts`
+  - `backend/src/services/chat-rag.service.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/build-sql-generation-prompt.use-case.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/auto-detect-relationships.use-case.ts`
+  - `backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`
+  - `frontend/src/components/chat/DynamicDashboard.tsx`
+  - `MEMORY_PALACE.md`

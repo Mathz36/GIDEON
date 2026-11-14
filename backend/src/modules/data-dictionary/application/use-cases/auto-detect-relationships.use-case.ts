@@ -78,9 +78,20 @@ export class AutoDetectRelationshipsUseCase {
 					});
 				} else {
 					// Verificação heurística por normalização de prefixos/separadores (ex: cod_parc vs codparc)
+					// e equivalência semântica de chaves de negócio (ex: cod_cliente -> cliente_id, cod_vendedor -> representante_id)
 					const stripped = colNameNorm.replace(/_/g, '');
+					const semanticAliases: Record<string, string[]> = {
+						codcliente: ['clienteid', 'codparc'],
+						clienteid: ['codcliente', 'codparc'],
+						codvendedor: ['representanteid', 'vendedorid', 'codvend'],
+						representanteid: ['codvendedor', 'vendedorid', 'codvend'],
+						codproduto: ['produtoid', 'codprod'],
+					};
+					const candidateMatches = new Set([stripped, ...(semanticAliases[stripped] ?? [])]);
+
 					for (const [pkName, pkTarget] of knownPks.entries()) {
-						if (pkTarget.tableName !== table.tableName.toLowerCase() && stripped === pkName.replace(/_/g, '')) {
+						const strippedPk = pkName.replace(/_/g, '');
+						if (pkTarget.tableName !== table.tableName.toLowerCase() && candidateMatches.has(strippedPk)) {
 							col.setForeignKey(pkTarget.tableName, pkTarget.columnName);
 							tableModified = true;
 							detectedRelationships.push({
@@ -88,7 +99,7 @@ export class AutoDetectRelationshipsUseCase {
 								fromColumn: col.columnName,
 								toTable: pkTarget.tableName,
 								toColumn: pkTarget.columnName,
-								reason: `Correspondência aproximada sem separadores (${col.columnName} -> ${pkTarget.tableName}.${pkTarget.columnName})`,
+								reason: `Correspondência semântica/aproximada (${col.columnName} -> ${pkTarget.tableName}.${pkTarget.columnName})`,
 							});
 							break;
 						}
