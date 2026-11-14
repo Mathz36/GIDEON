@@ -579,3 +579,33 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/src/__tests__/chart-decision-matrix.test.ts`
   - `backend/src/__tests__/rag-akita-hardening.test.ts`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Histórico Multi-Conversas (Fila FIFO de até 10 Conversas por Usuário), Compactação Automática de Contexto & Memória Pessoal de Longo Prazo da Gideon
+- **Agentes Responsáveis:** `planner`, `backend`, `ai-specialist`, `frontend`, `tester`
+- **Tipo:** `feat` / `test`
+- **Contexto & Motivação:**
+  O usuário solicitou a evolução do Chat da Gideon para o padrão dos melhores assistentes do mercado (ChatGPT / Claude), contemplando:
+  1. **Múltiplas Conversas por Usuário com Limite de 10 (Fila FIFO):** Cada usuário autenticado pode armazenar até 10 conversas isoladas por conta (`userId`). Quando a 11ª conversa é criada, aplica-se a fila **FIFO** (*First-In, First-Out*), sobrescrevendo automaticamente a conversa inativa mais antiga (com possibilidade de fixar até 2 conversas importantes via Pin $\📌$ para protegê-las do descarte).
+  2. **Compactação Automática de Conversas Longas (*Sliding Window + Rolling Summary*):** Quando uma conversa atinge **16 mensagens (8 turnos)** ou **12.000 caracteres (~3.000 tokens)** não compactados, o sistema mantém as **últimas 6 mensagens (3 turnos)** 100% intactas e resume de forma estruturada as mensagens anteriores (`conversation.summary`), preservando entidades (clientes, vendedores, produtos, datas e números) e evitando estouro da janela de contexto.
+  3. **Memória Pessoal Interna por Usuário (*Gideon Personal Memory* 🧠):** Memória persistente de longo prazo (`user_memories`) exclusiva por usuário que sobrevive entre todas as conversas (mesmo após o descarte FIFO de conversas antigas), aprendendo automaticamente no chat como o usuário gosta de ser tratado/chamado, seu estilo de resposta preferido, preferências analíticas/gráficas e seu cargo/foco, além de permitir visualização, adição e exclusão manual pelo modal **"Memória Pessoal da Gideon"** na UI.
+- **Implementações Realizadas:**
+  1. **Modelagem e Inicialização Segura no PostgreSQL (`schema.prisma` & `chat-history-memory.service.ts`):**
+     - Modelos `ChatConversation` (`chat_conversations`), `ChatMessage` (`chat_messages`) e `UserMemory` (`user_memories`) adicionados ao `schema.prisma` e inicializados de forma idempotente via `CREATE TABLE IF NOT EXISTS` em `ChatHistoryMemoryService.ensureSchemaInitialized()`, preservando 100% das tabelas dinâmicas `erp_*`.
+     - As 3 novas tabelas foram incluídas em `FORBIDDEN_SCHEMAS_AND_TABLES` (`chat-rag.service.ts`) para impedir qualquer leitura via Text-to-SQL.
+  2. **Motor de Conversas FIFO, Compactação e Memória (`chat-history-memory.service.ts` & `api.ts`):**
+     - Endpoints REST autenticados com isolamento RBAC estrito por `userId`: `GET/POST /api/chat/conversations`, `GET/PATCH/DELETE /api/chat/conversations/:id`, e `GET/POST/DELETE /api/chat/memories`.
+     - Integração completa no streaming SSE `POST /api/chat`: extrai memórias implícitas da pergunta, injeta o bloco `[MEMÓRIA PESSOAL E PERFIL DO USUÁRIO COM QUEM VOCÊ ESTÁ FALANDO]` no System Prompt, envia ao LLM o histórico compactado (`buildOptimizedHistoryForLlm`), persiste a troca com auto-compactação quando necessário e emite o evento SSE `event: conversation`.
+  3. **Interface do Usuário Estilo ChatGPT/Claude (`useChat.ts` & `Chat.tsx`):**
+     - Sidebar esquerda colapsável com botão **"+ Nova Conversa"**, indicador **`Suas Conversas (X/10 FIFO)`**, ações rápidas de Fixar ($\📌$), Renomear e Excluir conversas, badge de **`Contexto Compactado`** com visualização expansível do resumo executivo, e modal completo **"Memória Pessoal da Gideon 🧠"**.
+  4. **Suíte de Testes Automatizados (`chat-history-memory.test.ts`):**
+     - 6 novos testes cobrindo fila FIFO de 10 conversas, proteção de conversas fixadas, isolamento RBAC multi-usuário, compactação automática no 8º turno (16 mensagens -> 10 compactadas + 6 intactas), extração implícita de memória pessoal e bloqueio SQL Read-Only. Totalizando **105/105 testes passando** no backend.
+- **Arquivos Impactados:**
+  - `backend/prisma/schema.prisma`
+  - `backend/src/services/chat-history-memory.service.ts`
+  - `backend/src/services/chat-rag.service.ts`
+  - `backend/src/routes/api.ts`
+  - `frontend/src/hooks/useChat.ts`
+  - `frontend/src/pages/Chat.tsx`
+  - `backend/src/__tests__/chat-history-memory.test.ts`
+  - `MEMORY_PALACE.md`

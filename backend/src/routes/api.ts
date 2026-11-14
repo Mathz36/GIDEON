@@ -13,6 +13,7 @@ import prismaClient from '../config/prisma';
 import erpSyncScheduler from '../services/erp-sync.scheduler';
 import syncQueueManager from '../services/sync-queue.manager';
 import userDashboardService from '../services/user-dashboard.service';
+import chatHistoryMemoryService, { MemoryCategory } from '../services/chat-history-memory.service';
 import { autoDetectRelationshipsUseCase } from '../modules/data-dictionary';
 
 interface ErpQueryBody {
@@ -21,6 +22,7 @@ interface ErpQueryBody {
 }
 
 interface ChatBody {
+	conversationId?: unknown;
 	history?: unknown;
 	systemPrompt?: unknown;
 	parameters?: unknown;
@@ -226,9 +228,202 @@ apiRouter.put('/ai/configurations', requireAdmin, async (req: Request<Record<str
 	}
 });
 
+/* ==================== Rotas de Histórico de Conversas (Máx 10 / FIFO) & Memória Pessoal ==================== */
+
+apiRouter.get('/chat/conversations', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const result = await chatHistoryMemoryService.listUserConversations(userId);
+		res.status(200).json({ data: result });
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.post('/chat/conversations', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const title = typeof req.body?.title === 'string' ? req.body.title : undefined;
+		const result = await chatHistoryMemoryService.createConversation(userId, title);
+		res.status(201).json({
+			data: result.conversation,
+			evictedConversationIds: result.evictedConversationIds,
+		});
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.get('/chat/conversations/:id', requireAuth, async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const detail = await chatHistoryMemoryService.getConversationWithMessages(userId, req.params.id);
+		res.status(200).json({ data: detail });
+	} catch (error) {
+		if (error instanceof Error && error.message.includes('Acesso negado')) {
+			res.status(403).json({ error: error.message });
+			return;
+		}
+		if (error instanceof Error && error.message.includes('não encontrada')) {
+			res.status(404).json({ error: error.message });
+			return;
+		}
+		next(error);
+	}
+});
+
+apiRouter.patch('/chat/conversations/:id', requireAuth, async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		let updated;
+		if (typeof req.body?.isPinned === 'boolean') {
+			updated = await chatHistoryMemoryService.togglePinConversation(
+				userId,
+				req.params.id,
+				req.body.isPinned,
+			);
+		}
+		if (typeof req.body?.title === 'string' && req.body.title.trim()) {
+			updated = await chatHistoryMemoryService.renameConversation(
+				userId,
+				req.params.id,
+				req.body.title,
+			);
+		}
+
+		if (!updated) {
+			res.status(400).json({ error: 'Informe title ou isPinned para atualizar a conversa.' });
+			return;
+		}
+
+		res.status(200).json({ data: updated });
+	} catch (error) {
+		if (error instanceof Error && error.message.includes('Acesso negado')) {
+			res.status(403).json({ error: error.message });
+			return;
+		}
+		if (error instanceof Error && error.message.includes('fixar no máximo')) {
+			res.status(400).json({ error: error.message });
+			return;
+		}
+		next(error);
+	}
+});
+
+apiRouter.delete('/chat/conversations/:id', requireAuth, async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		await chatHistoryMemoryService.deleteConversation(userId, req.params.id);
+		res.status(204).end();
+	} catch (error) {
+		if (error instanceof Error && error.message.includes('Acesso negado')) {
+			res.status(403).json({ error: error.message });
+			return;
+		}
+		next(error);
+	}
+});
+
+apiRouter.get('/chat/memories', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const memories = await chatHistoryMemoryService.listUserMemories(userId);
+		res.status(200).json({ data: memories });
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.post('/chat/memories', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const fact = typeof req.body?.fact === 'string' ? req.body.fact.trim() : '';
+		const category = typeof req.body?.category === 'string' ? (req.body.category as MemoryCategory) : 'PREFERENCIA_GERAL';
+
+		if (!fact) {
+			res.status(400).json({ error: 'Informe o fato ou preferência para memorizar.' });
+			return;
+		}
+
+		const saved = await chatHistoryMemoryService.addOrUpdateUserMemory({
+			userId,
+			fact,
+			category,
+			source: 'MANUAL',
+		});
+		res.status(201).json({ data: saved });
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.delete('/chat/memories/:id', requireAuth, async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		await chatHistoryMemoryService.deleteUserMemory(userId, req.params.id);
+		res.status(204).end();
+	} catch (error) {
+		if (error instanceof Error && error.message.includes('Acesso negado')) {
+			res.status(403).json({ error: error.message });
+			return;
+		}
+		next(error);
+	}
+});
+
 apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>, unknown, ChatBody>, res, next) => {
 	try {
-		const history = validateHistory(req.body.history);
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		const rawHistory = validateHistory(req.body.history);
 
 		// Abre o canal SSE imediatamente para emitir eventos de progresso real ao frontend
 		res.status(200);
@@ -246,7 +441,53 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 			}
 		};
 
-		emitStatus(1, 'Analisando pergunta e contexto...', 'Interpretando histórico da conversa (Query Rewriter)');
+		emitStatus(1, 'Analisando pergunta e contexto...', 'Interpretando histórico da conversa e memória pessoal');
+
+		const lastUserMessage = [...rawHistory].reverse().find((m) => m.role === 'user')?.parts.map((p) => p.text).join(' ') ?? '';
+
+		// Se houver usuário autenticado, extrai memórias implícitas da mensagem e prepara conversa ativa (FIFO 10)
+		let activeConversationId =
+			typeof req.body.conversationId === 'string' && req.body.conversationId.trim()
+				? req.body.conversationId.trim()
+				: null;
+		let evictedConversationIds: string[] = [];
+		let newMemoriesSavedCount = 0;
+
+		if (userId && lastUserMessage) {
+			try {
+				const extracted = await chatHistoryMemoryService.extractAndSaveImplicitUserMemories(
+					userId,
+					lastUserMessage,
+				);
+				newMemoriesSavedCount = extracted.length;
+			} catch (memErr) {
+				console.warn('[ChatRoute] Aviso ao extrair memórias implícitas:', memErr);
+			}
+
+			if (!activeConversationId) {
+				try {
+					const createdConv = await chatHistoryMemoryService.createConversation(userId, lastUserMessage);
+					activeConversationId = createdConv.conversation.id;
+					evictedConversationIds = createdConv.evictedConversationIds;
+				} catch (convErr) {
+					console.warn('[ChatRoute] Aviso ao criar conversa automática:', convErr);
+				}
+			}
+		}
+
+		// Constrói o histórico otimizado (Resumo Compactado + Últimas Mensagens Intactas) se houver conversa salva
+		let effectiveHistory = rawHistory;
+		if (userId && activeConversationId && lastUserMessage) {
+			try {
+				effectiveHistory = await chatHistoryMemoryService.buildOptimizedHistoryForLlm(
+					userId,
+					activeConversationId,
+					lastUserMessage,
+				);
+			} catch {
+				effectiveHistory = rawHistory;
+			}
+		}
 
 		// Carrega as configurações da IA e as integrações cadastradas do banco de dados
 		const aiConfig = await aiConfigurationService.get();
@@ -264,8 +505,21 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 			)).join('\n');
 		}
 
+		// Carrega o bloco de Memória Pessoal de Longo Prazo do Usuário
+		let userMemoryContext = '';
+		if (userId) {
+			try {
+				userMemoryContext = await chatHistoryMemoryService.buildUserMemoryPromptBlock(userId, {
+					nome: authReq.user?.nome,
+					email: authReq.user?.email,
+					role: authReq.user?.role,
+				});
+			} catch {
+				userMemoryContext = '';
+			}
+		}
+
 		// Executa pipeline RAG / Text-to-SQL com Query Rewriter, Regras de Negócio da Empresa e Self-Healing SQL Retry
-		const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.parts.map((p) => p.text).join(' ') ?? '';
 		let ragResult: RagPipelineResult = {
 			noDataFound: true,
 			reason: 'EMPTY_QUESTION',
@@ -279,7 +533,11 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 		if (lastUserMessage) {
 			emitStatus(2, 'Consultando dados sincronizados do Sankhya ERP...', 'Executando query segura Read-Only no PostgreSQL');
 			try {
-				ragResult = await chatRagService.executeRagPipeline(lastUserMessage, history, companyBusinessRulesPrompt);
+				ragResult = await chatRagService.executeRagPipeline(
+					lastUserMessage,
+					effectiveHistory,
+					companyBusinessRulesPrompt,
+				);
 			} catch (ragErr) {
 				console.warn('[ChatRoute] Erro ao buscar dados reais via RAG:', ragErr);
 			}
@@ -287,9 +545,9 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 
 		const realDatabaseContext = ragResult.contextPrompt ? `\n\n${ragResult.contextPrompt}` : '';
 
-		// Combina as Regras de Negócio da Empresa (editáveis na UI) com as Diretivas Técnicas Internas da Gideon (ocultas no código)
+		// Combina as Regras de Negócio da Empresa (editáveis na UI) + Memória Pessoal do Usuário + Diretivas Técnicas Internas (ocultas)
 		const fullBaseSystemPrompt = aiConfigurationService.buildFullSystemPrompt(companyBusinessRulesPrompt);
-		const systemPrompt = `${fullBaseSystemPrompt}${erpContext}${realDatabaseContext}`;
+		const systemPrompt = `${fullBaseSystemPrompt}${userMemoryContext}${erpContext}${realDatabaseContext}`;
 
 		let parameters: GeminiParameters = {
 			temperature: aiConfig.temperature,
@@ -308,7 +566,7 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 		// Executa Geração + Revisão em 2 Camadas (Guardrail Determinístico + Agente Crítico LLM) + Auto-Correção + Fallback Determinístico
 		const reviewOutcome = await reviewer.generateAndReviewResponse({
 			userQuestion: lastUserMessage,
-			history,
+			history: effectiveHistory,
 			systemPrompt,
 			ragResult,
 			parameters,
@@ -316,6 +574,31 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 		});
 
 		const validatedText = reviewOutcome.finalResponse;
+
+		// Persiste o turno na conversa do usuário e executa compactação automática se atingir o limite (16 msgs / 12k chars)
+		if (userId && activeConversationId && lastUserMessage) {
+			try {
+				const savedExchange = await chatHistoryMemoryService.appendExchangeAndCompactIfNeeded({
+					userId,
+					conversationId: activeConversationId,
+					userMessage: lastUserMessage,
+					assistantMessage: validatedText,
+				});
+				if (!res.writableEnded && !res.closed) {
+					res.write(
+						`event: conversation\ndata: ${JSON.stringify({
+							conversationId: activeConversationId,
+							title: savedExchange.title,
+							wasCompacted: savedExchange.wasCompacted,
+							evictedConversationIds,
+							newMemoriesSavedCount,
+						})}\n\n`,
+					);
+				}
+			} catch (persistErr) {
+				console.warn('[ChatRoute] Aviso ao salvar turno na conversa:', persistErr);
+			}
+		}
 		const chunkSize = 180;
 
 		for (let offset = 0; offset < validatedText.length; offset += chunkSize) {
