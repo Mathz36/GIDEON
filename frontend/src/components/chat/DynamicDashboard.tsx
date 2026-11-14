@@ -69,9 +69,37 @@ function isCurrencyField(key?: unknown, title?: string): boolean {
 	return false;
 }
 
-function parseNumericValue(val: unknown): number | null {
+export function parseNumericValue(val: unknown): number | null {
 	if (typeof val === 'number') {
 		return Number.isFinite(val) ? val : null;
+	}
+	if (typeof val === 'bigint') {
+		const num = Number(val);
+		return Number.isSafeInteger(num) ? num : null;
+	}
+	if (val && typeof val === 'object') {
+		// Prisma.Decimal ou Decimal.js
+		if (typeof (val as any).toNumber === 'function') {
+			const n = (val as any).toNumber();
+			return typeof n === 'number' && Number.isFinite(n) ? n : null;
+		}
+		if ('d' in val && 's' in val) {
+			const dArr = Array.isArray((val as any).d) ? (val as any).d : [];
+			const sign = typeof (val as any).s === 'number' ? (val as any).s : 1;
+			const exp = typeof (val as any).e === 'number' ? (val as any).e : null;
+			const digits = dArr.map(String).join('');
+			if (digits) {
+				if (exp !== null) {
+					const first = digits[0];
+					const rest = digits.slice(1);
+					const mantissa = rest ? Number(`${first}.${rest}`) : Number(first);
+					const n = sign * mantissa * Math.pow(10, exp);
+					if (Number.isFinite(n)) return n;
+				}
+				const n = Number(digits) * sign;
+				if (Number.isFinite(n)) return n;
+			}
+		}
 	}
 	if (typeof val === 'string') {
 		const trimmed = val.trim();
@@ -198,9 +226,9 @@ export function parseDashboardConfig(configString: string): {
 			.map((row) => {
 				const normalizedRow: Record<string, unknown> = {};
 				for (const [k, v] of Object.entries(row)) {
-					if (!ID_OR_CODE_KEY_REGEX.test(String(k).trim()) && typeof v === 'string') {
-						const parsedNum = parseNumericValue(v);
-						normalizedRow[k] = parsedNum !== null ? parsedNum : v;
+					const parsedNum = parseNumericValue(v);
+					if (!ID_OR_CODE_KEY_REGEX.test(String(k).trim()) && parsedNum !== null) {
+						normalizedRow[k] = parsedNum;
 					} else {
 						normalizedRow[k] = v;
 					}
@@ -231,6 +259,34 @@ export function parseDashboardConfig(configString: string): {
 			status: isLikelyStreaming ? 'streaming' : 'invalid',
 			config: null,
 		};
+	}
+}
+
+class SafeChartContainer extends React.Component<
+	{ children: React.ReactNode; fallback: React.ReactNode },
+	{ hasError: boolean }
+> {
+	state = { hasError: false };
+
+	static getDerivedStateFromError() {
+		return { hasError: true };
+	}
+
+	componentDidCatch(error: Error) {
+		console.warn('[DynamicDashboard] Falha ao renderizar com Recharts, aplicando fallback tabular seguro:', error);
+	}
+
+	componentDidUpdate(prevProps: { children: React.ReactNode }) {
+		if (this.state.hasError && prevProps.children !== this.props.children) {
+			this.setState({ hasError: false });
+		}
+	}
+
+	render() {
+		if (this.state.hasError) {
+			return this.props.fallback;
+		}
+		return this.props.children;
 	}
 }
 
@@ -551,265 +607,269 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({
 				</>
 			)}
 
-			{type === 'bar' && (
-				<div className="h-64 w-full pt-2 sm:h-72">
-					<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
-						<BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: data.length > 4 ? 28 : 12 }}>
-							<CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-							<XAxis
-								dataKey={nameKey}
-								stroke="#64748b"
-								fontSize={11}
-								tickLine={false}
-								axisLine={{ stroke: '#cbd5e1' }}
-								angle={data.length > 4 ? -25 : 0}
-								textAnchor={data.length > 4 ? 'end' : 'middle'}
-								interval="preserveStartEnd"
-								tickFormatter={(val) => truncateLabel(val, 14)}
-							/>
-							<YAxis
-								stroke="#64748b"
-								fontSize={11}
-								tickLine={false}
-								axisLine={false}
-								width={isPrimaryValueCurrency ? 66 : 52}
-								tickFormatter={(val) => formatAxisCompactPtBr(val, isPrimaryValueCurrency)}
-							/>
-							<Tooltip
-								contentStyle={{
-									backgroundColor: '#0f172a',
-									borderRadius: '0.75rem',
-									border: '1px solid #334155',
-									color: '#fff',
-									fontSize: '0.75rem',
-									boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
-								}}
-								formatter={(val: unknown) => [
-									formatFullValuePtBr(val, valueKey, title),
-									formatColumnLabel(valueKey),
-								]}
-							/>
-							<Bar dataKey={valueKey} fill="#4f46e5" radius={[6, 6, 0, 0]} maxBarSize={56} />
-						</BarChart>
-					</ResponsiveContainer>
-				</div>
-			)}
+			{type !== 'table' && (
+				<SafeChartContainer fallback={renderDesktopScrollableTable()}>
+					{type === 'bar' && (
+						<div className="h-64 w-full pt-2 sm:h-72">
+							<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
+								<BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: data.length > 4 ? 28 : 12 }}>
+									<CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+									<XAxis
+										dataKey={nameKey}
+										stroke="#64748b"
+										fontSize={11}
+										tickLine={false}
+										axisLine={{ stroke: '#cbd5e1' }}
+										angle={data.length > 4 ? -25 : 0}
+										textAnchor={data.length > 4 ? 'end' : 'middle'}
+										interval="preserveStartEnd"
+										tickFormatter={(val) => truncateLabel(val, 14)}
+									/>
+									<YAxis
+										stroke="#64748b"
+										fontSize={11}
+										tickLine={false}
+										axisLine={false}
+										width={isPrimaryValueCurrency ? 66 : 52}
+										tickFormatter={(val) => formatAxisCompactPtBr(val, isPrimaryValueCurrency)}
+									/>
+									<Tooltip
+										contentStyle={{
+											backgroundColor: '#0f172a',
+											borderRadius: '0.75rem',
+											border: '1px solid #334155',
+											color: '#fff',
+											fontSize: '0.75rem',
+											boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
+										}}
+										formatter={(val: unknown) => [
+											formatFullValuePtBr(val, valueKey, title),
+											formatColumnLabel(valueKey),
+										]}
+									/>
+									<Bar dataKey={valueKey} fill="#4f46e5" radius={[6, 6, 0, 0]} maxBarSize={56} />
+								</BarChart>
+							</ResponsiveContainer>
+						</div>
+					)}
 
-			{type === 'horizontal-bar' && (
-				<div
-					className="w-full pt-2"
-					style={{ height: `${Math.max(260, Math.min(560, data.length * 38 + 36))}px` }}
-				>
-					<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
-						<BarChart
-							layout="vertical"
-							data={data}
-							margin={{ top: 8, right: 16, left: 4, bottom: 8 }}
+					{type === 'horizontal-bar' && (
+						<div
+							className="w-full pt-2"
+							style={{ height: `${Math.max(260, Math.min(560, data.length * 38 + 36))}px` }}
 						>
-							<CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-							<XAxis
-								type="number"
-								stroke="#64748b"
-								fontSize={11}
-								tickLine={false}
-								axisLine={false}
-								tickFormatter={(val) => formatAxisCompactPtBr(val, isPrimaryValueCurrency)}
-							/>
-							<YAxis
-								type="category"
-								dataKey={nameKey}
-								stroke="#64748b"
-								fontSize={11}
-								tickLine={false}
-								axisLine={{ stroke: '#cbd5e1' }}
-								width={104}
-								interval={0}
-								tickFormatter={(val) => truncateLabel(val, 16)}
-							/>
-							<Tooltip
-								contentStyle={{
-									backgroundColor: '#0f172a',
-									borderRadius: '0.75rem',
-									border: '1px solid #334155',
-									color: '#fff',
-									fontSize: '0.75rem',
-									boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
-								}}
-								formatter={(val: unknown) => [
-									formatFullValuePtBr(val, valueKey, title),
-									formatColumnLabel(valueKey),
-								]}
-							/>
-							<Bar dataKey={valueKey} fill="#4f46e5" radius={[0, 6, 6, 0]} maxBarSize={28} />
-						</BarChart>
-					</ResponsiveContainer>
-				</div>
-			)}
+							<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
+								<BarChart
+									layout="vertical"
+									data={data}
+									margin={{ top: 8, right: 16, left: 4, bottom: 8 }}
+								>
+									<CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+									<XAxis
+										type="number"
+										stroke="#64748b"
+										fontSize={11}
+										tickLine={false}
+										axisLine={false}
+										tickFormatter={(val) => formatAxisCompactPtBr(val, isPrimaryValueCurrency)}
+									/>
+									<YAxis
+										type="category"
+										dataKey={nameKey}
+										stroke="#64748b"
+										fontSize={11}
+										tickLine={false}
+										axisLine={{ stroke: '#cbd5e1' }}
+										width={104}
+										interval={0}
+										tickFormatter={(val) => truncateLabel(val, 16)}
+									/>
+									<Tooltip
+										contentStyle={{
+											backgroundColor: '#0f172a',
+											borderRadius: '0.75rem',
+											border: '1px solid #334155',
+											color: '#fff',
+											fontSize: '0.75rem',
+											boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
+										}}
+										formatter={(val: unknown) => [
+											formatFullValuePtBr(val, valueKey, title),
+											formatColumnLabel(valueKey),
+										]}
+									/>
+									<Bar dataKey={valueKey} fill="#4f46e5" radius={[0, 6, 6, 0]} maxBarSize={28} />
+								</BarChart>
+							</ResponsiveContainer>
+						</div>
+					)}
 
-			{type === 'line' && (
-				<div className="h-64 w-full pt-2 sm:h-72">
-					<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
-						<LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 16 }}>
-							<CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-							<XAxis
-								dataKey={nameKey}
-								stroke="#64748b"
-								fontSize={11}
-								tickLine={false}
-								axisLine={{ stroke: '#cbd5e1' }}
-								interval="preserveStartEnd"
-								tickFormatter={(val) => truncateLabel(val, 14)}
-							/>
-							<YAxis
-								stroke="#64748b"
-								fontSize={11}
-								tickLine={false}
-								axisLine={false}
-								width={isPrimaryValueCurrency ? 66 : 52}
-								tickFormatter={(val) => formatAxisCompactPtBr(val, isPrimaryValueCurrency)}
-							/>
-							<Tooltip
-								contentStyle={{
-									backgroundColor: '#0f172a',
-									borderRadius: '0.75rem',
-									border: '1px solid #334155',
-									color: '#fff',
-									fontSize: '0.75rem',
-									boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
-								}}
-								formatter={(val: unknown) => [
-									formatFullValuePtBr(val, valueKey, title),
-									formatColumnLabel(valueKey),
-								]}
-							/>
-							<Line
-								type="monotone"
-								dataKey={valueKey}
-								stroke="#10b981"
-								strokeWidth={3}
-								dot={{ r: 4, fill: '#10b981' }}
-								activeDot={{ r: 6 }}
-							/>
-						</LineChart>
-					</ResponsiveContainer>
-				</div>
-			)}
+					{type === 'line' && (
+						<div className="h-64 w-full pt-2 sm:h-72">
+							<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
+								<LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 16 }}>
+									<CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+									<XAxis
+										dataKey={nameKey}
+										stroke="#64748b"
+										fontSize={11}
+										tickLine={false}
+										axisLine={{ stroke: '#cbd5e1' }}
+										interval="preserveStartEnd"
+										tickFormatter={(val) => truncateLabel(val, 14)}
+									/>
+									<YAxis
+										stroke="#64748b"
+										fontSize={11}
+										tickLine={false}
+										axisLine={false}
+										width={isPrimaryValueCurrency ? 66 : 52}
+										tickFormatter={(val) => formatAxisCompactPtBr(val, isPrimaryValueCurrency)}
+									/>
+									<Tooltip
+										contentStyle={{
+											backgroundColor: '#0f172a',
+											borderRadius: '0.75rem',
+											border: '1px solid #334155',
+											color: '#fff',
+											fontSize: '0.75rem',
+											boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
+										}}
+										formatter={(val: unknown) => [
+											formatFullValuePtBr(val, valueKey, title),
+											formatColumnLabel(valueKey),
+										]}
+									/>
+									<Line
+										type="monotone"
+										dataKey={valueKey}
+										stroke="#10b981"
+										strokeWidth={3}
+										dot={{ r: 4, fill: '#10b981' }}
+										activeDot={{ r: 6 }}
+									/>
+								</LineChart>
+							</ResponsiveContainer>
+						</div>
+					)}
 
-			{type === 'area' && (
-				<div className="h-64 w-full pt-2 sm:h-72">
-					<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
-						<AreaChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: data.length > 4 ? 28 : 12 }}>
-							<defs>
-								<linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-									<stop offset="5%" stopColor="#4f46e5" stopOpacity={0.4} />
-									<stop offset="95%" stopColor="#4f46e5" stopOpacity={0.0} />
-								</linearGradient>
-							</defs>
-							<CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-							<XAxis
-								dataKey={nameKey}
-								stroke="#64748b"
-								fontSize={11}
-								tickLine={false}
-								axisLine={{ stroke: '#cbd5e1' }}
-								angle={data.length > 4 ? -25 : 0}
-								textAnchor={data.length > 4 ? 'end' : 'middle'}
-								interval="preserveStartEnd"
-								tickFormatter={(val) => truncateLabel(val, 14)}
-							/>
-							<YAxis
-								stroke="#64748b"
-								fontSize={11}
-								tickLine={false}
-								axisLine={false}
-								width={isPrimaryValueCurrency ? 66 : 52}
-								tickFormatter={(val) => formatAxisCompactPtBr(val, isPrimaryValueCurrency)}
-							/>
-							<Tooltip
-								contentStyle={{
-									backgroundColor: '#0f172a',
-									borderRadius: '0.75rem',
-									border: '1px solid #334155',
-									color: '#fff',
-									fontSize: '0.75rem',
-									boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
-								}}
-								formatter={(val: unknown) => [
-									formatFullValuePtBr(val, valueKey, title),
-									formatColumnLabel(valueKey),
-								]}
-							/>
-							<Area
-								type="monotone"
-								dataKey={valueKey}
-								stroke="#4f46e5"
-								strokeWidth={2.5}
-								fillOpacity={1}
-								fill={`url(#${gradientId})`}
-								activeDot={{ r: 5, stroke: '#4f46e5', strokeWidth: 2, fill: '#ffffff' }}
-							/>
-						</AreaChart>
-					</ResponsiveContainer>
-				</div>
-			)}
+					{type === 'area' && (
+						<div className="h-64 w-full pt-2 sm:h-72">
+							<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
+								<AreaChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: data.length > 4 ? 28 : 12 }}>
+									<defs>
+										<linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+											<stop offset="5%" stopColor="#4f46e5" stopOpacity={0.4} />
+											<stop offset="95%" stopColor="#4f46e5" stopOpacity={0.0} />
+										</linearGradient>
+									</defs>
+									<CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+									<XAxis
+										dataKey={nameKey}
+										stroke="#64748b"
+										fontSize={11}
+										tickLine={false}
+										axisLine={{ stroke: '#cbd5e1' }}
+										angle={data.length > 4 ? -25 : 0}
+										textAnchor={data.length > 4 ? 'end' : 'middle'}
+										interval="preserveStartEnd"
+										tickFormatter={(val) => truncateLabel(val, 14)}
+									/>
+									<YAxis
+										stroke="#64748b"
+										fontSize={11}
+										tickLine={false}
+										axisLine={false}
+										width={isPrimaryValueCurrency ? 66 : 52}
+										tickFormatter={(val) => formatAxisCompactPtBr(val, isPrimaryValueCurrency)}
+									/>
+									<Tooltip
+										contentStyle={{
+											backgroundColor: '#0f172a',
+											borderRadius: '0.75rem',
+											border: '1px solid #334155',
+											color: '#fff',
+											fontSize: '0.75rem',
+											boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
+										}}
+										formatter={(val: unknown) => [
+											formatFullValuePtBr(val, valueKey, title),
+											formatColumnLabel(valueKey),
+										]}
+									/>
+									<Area
+										type="monotone"
+										dataKey={valueKey}
+										stroke="#4f46e5"
+										strokeWidth={2.5}
+										fillOpacity={1}
+										fill={`url(#${gradientId})`}
+										activeDot={{ r: 5, stroke: '#4f46e5', strokeWidth: 2, fill: '#ffffff' }}
+									/>
+								</AreaChart>
+							</ResponsiveContainer>
+						</div>
+					)}
 
-			{type === 'pie' && validPieData.length === 0 && (
-				<div className="my-4 flex h-48 w-full flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-center text-xs text-slate-500">
-					<AlertCircle className="mb-1.5 h-5 w-5 text-slate-400" />
-					<p className="font-medium text-slate-600">Nenhum valor positivo para exibir no gráfico</p>
-					<p className="mt-0.5 text-[11px] text-slate-400">Todos os valores deste conjunto de dados são zero ou nulos.</p>
-				</div>
-			)}
+					{type === 'pie' && validPieData.length === 0 && (
+						<div className="my-4 flex h-48 w-full flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-center text-xs text-slate-500">
+							<AlertCircle className="mb-1.5 h-5 w-5 text-slate-400" />
+							<p className="font-medium text-slate-600">Nenhum valor positivo para exibir no gráfico</p>
+							<p className="mt-0.5 text-[11px] text-slate-400">Todos os valores deste conjunto de dados são zero ou nulos.</p>
+						</div>
+					)}
 
-			{type === 'pie' && validPieData.length > 0 && (
-				<div className="h-64 w-full pt-2 sm:h-72">
-					<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
-						<PieChart>
-							<Pie
-								data={validPieData}
-								dataKey={valueKey}
-								nameKey={nameKey}
-								cx="50%"
-								cy="44%"
-								outerRadius={80}
-								innerRadius={46}
-								paddingAngle={2}
-								label={({ name, percent }: { name?: unknown; percent?: number }) => {
-									const pct = (percent ?? 0) * 100;
-									return pct >= 5 ? `${truncateLabel(name, 12)} (${pct.toFixed(0)}%)` : '';
-								}}
-								labelLine={false}
-							>
-								{validPieData.map((_, index) => (
-									<Cell key={`cell-${index}`} fill={PALETTE[index % PALETTE.length]} />
-								))}
-							</Pie>
-							<Tooltip
-								contentStyle={{
-									backgroundColor: '#0f172a',
-									borderRadius: '0.75rem',
-									border: '1px solid #334155',
-									color: '#fff',
-									fontSize: '0.75rem',
-									boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
-								}}
-								formatter={(val: unknown) => [
-									formatFullValuePtBr(val, valueKey, title),
-									formatColumnLabel(valueKey),
-								]}
-							/>
-							<Legend
-								verticalAlign="bottom"
-								height={40}
-								iconType="circle"
-								wrapperStyle={{ fontSize: '0.72rem', paddingTop: '8px' }}
-								formatter={(val: unknown) => (
-									<span className="font-medium text-slate-600">{truncateLabel(val, 18)}</span>
-								)}
-							/>
-						</PieChart>
-					</ResponsiveContainer>
-				</div>
+					{type === 'pie' && validPieData.length > 0 && (
+						<div className="h-64 w-full pt-2 sm:h-72">
+							<ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={220}>
+								<PieChart>
+									<Pie
+										data={validPieData}
+										dataKey={valueKey}
+										nameKey={nameKey}
+										cx="50%"
+										cy="44%"
+										outerRadius={80}
+										innerRadius={46}
+										paddingAngle={2}
+										label={({ name, percent }: { name?: unknown; percent?: number }) => {
+											const pct = (percent ?? 0) * 100;
+											return pct >= 5 ? `${truncateLabel(name, 12)} (${pct.toFixed(0)}%)` : '';
+										}}
+										labelLine={false}
+									>
+										{validPieData.map((_, index) => (
+											<Cell key={`cell-${index}`} fill={PALETTE[index % PALETTE.length]} />
+										))}
+									</Pie>
+									<Tooltip
+										contentStyle={{
+											backgroundColor: '#0f172a',
+											borderRadius: '0.75rem',
+											border: '1px solid #334155',
+											color: '#fff',
+											fontSize: '0.75rem',
+											boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.25)',
+										}}
+										formatter={(val: unknown) => [
+											formatFullValuePtBr(val, valueKey, title),
+											formatColumnLabel(valueKey),
+										]}
+									/>
+									<Legend
+										verticalAlign="bottom"
+										height={40}
+										iconType="circle"
+										wrapperStyle={{ fontSize: '0.72rem', paddingTop: '8px' }}
+										formatter={(val: unknown) => (
+											<span className="font-medium text-slate-600">{truncateLabel(val, 18)}</span>
+										)}
+									/>
+								</PieChart>
+							</ResponsiveContainer>
+						</div>
+					)}
+				</SafeChartContainer>
 			)}
 		</div>
 	);

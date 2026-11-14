@@ -55,11 +55,6 @@ const SUGGESTION_TEMPLATES: Array<{
 	size: CardSize;
 	badge: string;
 	description: string;
-	sampleConfig: {
-		type: DashboardCard['chartType'];
-		title: string;
-		data: Array<Record<string, unknown>>;
-	};
 }> = [
 	{
 		idSuffix: 'fat-mes',
@@ -69,20 +64,6 @@ const SUGGESTION_TEMPLATES: Array<{
 		size: 'M',
 		badge: 'Área • Médio (M)',
 		description: 'Evolução diária da receita acumulada no mês em gráfico de área preenchida',
-		sampleConfig: {
-			type: 'area',
-			title: 'Faturamento Diário Acumulado (R$)',
-			data: [
-				{ dia: '01/Nov', faturamento: 28400 },
-				{ dia: '03/Nov', faturamento: 45200 },
-				{ dia: '05/Nov', faturamento: 52100 },
-				{ dia: '07/Nov', faturamento: 68900 },
-				{ dia: '09/Nov', faturamento: 74300 },
-				{ dia: '11/Nov', faturamento: 89600 },
-				{ dia: '13/Nov', faturamento: 112500 },
-				{ dia: '15/Nov', faturamento: 135800 },
-			],
-		},
 	},
 	{
 		idSuffix: 'top-clientes',
@@ -92,17 +73,6 @@ const SUGGESTION_TEMPLATES: Array<{
 		size: 'P',
 		badge: 'Barras • Compacto (P)',
 		description: 'Ranking consolidado dos parceiros comerciais que mais faturaram no ERP',
-		sampleConfig: {
-			type: 'horizontal-bar',
-			title: 'Top 5 Clientes em Faturamento (R$)',
-			data: [
-				{ parceiro: 'Atacadão Central', faturamento: 94500 },
-				{ parceiro: 'Distribuidora Progresso', faturamento: 78200 },
-				{ parceiro: 'Supermercados Estrela', faturamento: 61400 },
-				{ parceiro: 'Varejo Brasil Ltda', faturamento: 48900 },
-				{ parceiro: 'Logística Global S/A', faturamento: 35100 },
-			],
-		},
 	},
 	{
 		idSuffix: 'formas-pagto',
@@ -112,16 +82,6 @@ const SUGGESTION_TEMPLATES: Array<{
 		size: 'P',
 		badge: 'Pizza • Compacto (P)',
 		description: 'Participação percentual entre PIX, Cartão, Boleto Bancário e Transferência',
-		sampleConfig: {
-			type: 'pie',
-			title: 'Distribuição por Meio de Pagamento',
-			data: [
-				{ meio: 'PIX Instantâneo', valor: 85400 },
-				{ meio: 'Boleto Bancário', valor: 62100 },
-				{ meio: 'Cartão de Crédito', valor: 41800 },
-				{ meio: 'Transferência / TED', valor: 19500 },
-			],
-		},
 	},
 ];
 
@@ -222,6 +182,7 @@ export default function UserDashboard() {
 			setIsInitialLoading(true);
 
 			let loadedCards: DashboardCard[] = [];
+			let backendSuccess = false;
 			const token = localStorage.getItem('gideon.auth.token');
 
 			// 1. Tenta carregar do backend (GET /api/dashboard/me)
@@ -233,14 +194,21 @@ export default function UserDashboard() {
 				});
 
 				if (response.ok) {
+					backendSuccess = true;
 					const result = await response.json();
 					const dashboard = result.data || result;
 					const widgets = dashboard?.widgets || [];
-					if (Array.isArray(widgets) && widgets.length > 0) {
+					if (Array.isArray(widgets)) {
 						loadedCards = widgets.map((w: any, idx: number) => {
 							const colSpan = typeof w.colSpan === 'number' ? w.colSpan : 2;
 							const cardSize: CardSize = colSpan === 1 ? 'P' : colSpan === 3 ? 'G' : 'M';
-							const rows = Array.isArray(w.data) ? w.data : [];
+							const rows = Array.isArray(w.data)
+								? w.data
+								: Array.isArray(w.cachedData?.data)
+									? w.cachedData.data
+									: Array.isArray(w.cachedData)
+										? w.cachedData
+										: [];
 
 							return {
 								id: w.id || generateCardId(),
@@ -259,18 +227,24 @@ export default function UserDashboard() {
 							};
 						});
 					}
+					// Atualiza cache local sincronizado com o banco real
+					try {
+						localStorage.setItem(storageKey, JSON.stringify(loadedCards));
+					} catch {
+						// Ignora quota de localStorage
+					}
 				}
 			} catch {
 				// Ignora falha de rede do backend e passa para o cache local
 			}
 
-			// 2. Se backend não retornou dados, carrega do localStorage
-			if (loadedCards.length === 0) {
+			// 2. Se backend não esteve disponível, carrega do cache local
+			if (!backendSuccess) {
 				try {
 					const cached = localStorage.getItem(storageKey);
 					if (cached) {
 						const parsed = JSON.parse(cached);
-						if (Array.isArray(parsed) && parsed.length > 0) {
+						if (Array.isArray(parsed)) {
 							loadedCards = parsed;
 						}
 					}
@@ -295,93 +269,6 @@ export default function UserDashboard() {
 		};
 	}, [storageKey]);
 
-	// Fallback inteligente para gerar dados simulados de alto padrão caso a IA esteja offline ou sem ERP
-	const generateSmartFallbackChart = (queryText: string): { title: string; chartType: DashboardCard['chartType']; configString: string; data: unknown[] } => {
-		const lower = queryText.toLowerCase();
-
-		if (lower.includes('horizontal') || lower.includes('ranking') || lower.includes('cliente') || lower.includes('parceiro')) {
-			const data = [
-				{ cliente: 'Atacadão Central', faturamento: 95400 },
-				{ cliente: 'Distribuidora Progresso', faturamento: 82100 },
-				{ cliente: 'Supermercados Estrela', faturamento: 64700 },
-				{ cliente: 'Varejo Brasil Ltda', faturamento: 51200 },
-				{ cliente: 'Comércio Nova Era', faturamento: 38600 },
-			];
-			return {
-				title: 'Top Clientes em Faturamento',
-				chartType: 'horizontal-bar',
-				configString: JSON.stringify({ type: 'horizontal-bar', title: 'Top Clientes em Faturamento (R$)', data }),
-				data,
-			};
-		}
-
-		if (lower.includes('área') || lower.includes('area') || lower.includes('faturamento') || lower.includes('diario') || lower.includes('diário')) {
-			const data = [
-				{ dia: '01/Nov', faturamento: 32000 },
-				{ dia: '03/Nov', faturamento: 48500 },
-				{ dia: '05/Nov', faturamento: 56200 },
-				{ dia: '07/Nov', faturamento: 71400 },
-				{ dia: '09/Nov', faturamento: 83000 },
-				{ dia: '11/Nov', faturamento: 96500 },
-				{ dia: '13/Nov', faturamento: 114200 },
-				{ dia: '15/Nov', faturamento: 138000 },
-			];
-			return {
-				title: 'Evolução Diária do Faturamento',
-				chartType: 'area',
-				configString: JSON.stringify({ type: 'area', title: 'Faturamento Acumulado (R$)', data }),
-				data,
-			};
-		}
-
-		if (lower.includes('pizza') || lower.includes('pagamento') || lower.includes('participação') || lower.includes('canal')) {
-			const data = [
-				{ canal: 'PIX Instantâneo', vendas: 92400 },
-				{ canal: 'Boleto Faturado', vendas: 67300 },
-				{ canal: 'Cartão de Crédito', vendas: 45200 },
-				{ canal: 'Outros Meios', vendas: 18100 },
-			];
-			return {
-				title: 'Distribuição de Formas de Pagamento',
-				chartType: 'pie',
-				configString: JSON.stringify({ type: 'pie', title: 'Distribuição por Meio de Pagamento', data }),
-				data,
-			};
-		}
-
-		if (lower.includes('linha') || lower.includes('evolução') || lower.includes('tendência') || lower.includes('tempo')) {
-			const data = [
-				{ mes: 'Jun', faturamento: 142000, meta: 130000 },
-				{ mes: 'Jul', faturamento: 158000, meta: 145000 },
-				{ mes: 'Ago', faturamento: 164000, meta: 160000 },
-				{ mes: 'Set', faturamento: 182000, meta: 170000 },
-				{ mes: 'Out', faturamento: 195000, meta: 185000 },
-				{ mes: 'Nov', faturamento: 218000, meta: 200000 },
-			];
-			return {
-				title: 'Evolução Semestral vs Meta',
-				chartType: 'line',
-				configString: JSON.stringify({ type: 'line', title: 'Faturamento vs Meta Realizada (R$)', data }),
-				data,
-			};
-		}
-
-		// Padrão: Barras verticais
-		const data = [
-			{ categoria: 'Alimentos & Bebidas', vendas: 84200 },
-			{ categoria: 'Higiene & Limpeza', vendas: 63100 },
-			{ categoria: 'Utilidades Domésticas', vendas: 47900 },
-			{ categoria: 'Embalagens Industriais', vendas: 35800 },
-			{ categoria: 'Descartáveis', vendas: 24500 },
-		];
-		return {
-			title: queryText.length > 35 ? `${queryText.substring(0, 32)}...` : queryText,
-			chartType: 'bar',
-			configString: JSON.stringify({ type: 'bar', title: queryText, data }),
-			data,
-		};
-	};
-
 	// Ação de Gerar Indicador via Barra de Criação da Gideon
 	const handleGenerateCard = async (textToGenerate?: string) => {
 		const targetPrompt = (textToGenerate || promptInput).trim();
@@ -393,101 +280,61 @@ export default function UserDashboard() {
 
 		try {
 			const token = localStorage.getItem('gideon.auth.token');
-			let newCard: DashboardCard | null = null;
 
-			// 1. Tenta chamar o endpoint dedicado do backend: POST /api/dashboard/widgets/generate
-			try {
-				const response = await fetch('/api/dashboard/widgets/generate', {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						...(token ? { Authorization: `Bearer ${token}` } : {}),
-					},
-					body: JSON.stringify({ prompt: targetPrompt }),
-				});
+			const response = await fetch('/api/dashboard/widgets/generate', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					...(token ? { Authorization: `Bearer ${token}` } : {}),
+				},
+				body: JSON.stringify({ prompt: targetPrompt }),
+			});
 
-				if (response.ok) {
-					const resData = await response.json();
-					const widget = resData.data;
-					if (widget) {
-						const colSpan = typeof widget.colSpan === 'number' ? widget.colSpan : 2;
-						const cardSize: CardSize = colSpan === 1 ? 'P' : colSpan === 3 ? 'G' : 'M';
-						newCard = {
-							id: widget.id || generateCardId(),
-							title: widget.title,
-							prompt: targetPrompt,
-							chartType: (widget.type || 'bar') as DashboardCard['chartType'],
-							size: cardSize,
-							isExpandedHeight: Boolean(widget.rowSpan && widget.rowSpan > 1),
-							order: 0,
-							configString: JSON.stringify({
-								type: widget.type,
-								title: widget.title,
-								data: Array.isArray(widget.data) ? widget.data : [],
-							}),
-							lastRefreshedAt: widget.updatedAt || new Date().toISOString(),
-						};
-					}
-				}
-			} catch (apiErr) {
-				console.warn('[UserDashboard] Tentativa via /api/dashboard/widgets/generate falhou, gerando indicador localmente:', apiErr);
-			}
+			const resData = await response.json().catch(() => null);
 
-			// 2. Se a API de geração direta não estiver disponível, gera usando fallback inteligente
-			if (!newCard) {
-				setGenerationStatusText('Compilando indicadores executivos representativos...');
-				await new Promise((r) => setTimeout(r, 600));
-				const fallback = generateSmartFallbackChart(targetPrompt);
+			if (response.ok && resData?.data) {
+				const widget = resData.data;
+				const colSpan = typeof widget.colSpan === 'number' ? widget.colSpan : 2;
+				const cardSize: CardSize = colSpan === 1 ? 'P' : colSpan === 3 ? 'G' : 'M';
+				const rows = Array.isArray(widget.data)
+					? widget.data
+					: Array.isArray(widget.cachedData?.data)
+						? widget.cachedData.data
+						: Array.isArray(widget.cachedData)
+							? widget.cachedData
+							: [];
 
-				let defaultSize: CardSize = 'M';
-				if (fallback.chartType === 'pie' || fallback.chartType === 'horizontal-bar') {
-					defaultSize = 'P';
-				} else if (fallback.chartType === 'table') {
-					defaultSize = 'G';
-				}
-
-				newCard = {
-					id: generateCardId(),
-					title: fallback.title,
+				const newCard: DashboardCard = {
+					id: widget.id || generateCardId(),
+					title: widget.title || 'Indicador Executivo',
 					prompt: targetPrompt,
-					chartType: fallback.chartType,
-					size: defaultSize,
-					isExpandedHeight: false,
+					chartType: (widget.type || 'bar') as DashboardCard['chartType'],
+					size: cardSize,
+					isExpandedHeight: Boolean(widget.rowSpan && widget.rowSpan > 1),
 					order: 0,
-					configString: fallback.configString,
-					lastRefreshedAt: new Date().toISOString(),
+					configString: JSON.stringify({
+						type: widget.type || 'bar',
+						title: widget.title || 'Indicador Executivo',
+						data: rows,
+					}),
+					lastRefreshedAt: widget.updatedAt || new Date().toISOString(),
 				};
 
-				// Tenta persistir novo widget no backend se possível
-				try {
-					await fetch('/api/dashboard/widgets', {
-						method: 'POST',
-						headers: {
-							'Content-Type': 'application/json',
-							...(token ? { Authorization: `Bearer ${token}` } : {}),
-						},
-						body: JSON.stringify({
-							title: fallback.title,
-							type: fallback.chartType,
-							data: fallback.data,
-							colSpan: defaultSize === 'P' ? 1 : defaultSize === 'M' ? 2 : 3,
-							rowSpan: 1,
-							queryPrompt: targetPrompt,
-						}),
-					});
-				} catch {
-					// Continua com salvamento local
-				}
+				// Insere no início do painel e reordena os demais
+				const updated = [newCard, ...cardsRef.current.map((c, i) => ({ ...c, order: i + 1 }))];
+				setCards(updated);
+				triggerAutoSave(updated);
+
+				setPromptInput('');
+			} else {
+				const errorMsg =
+					resData?.error ||
+					resData?.message ||
+					'Não foram encontrados registros no banco de dados para criar este indicador.';
+				setErrorMessage(errorMsg);
 			}
-
-			// Insere no início do painel e reordena os demais
-			const updated = [newCard, ...cardsRef.current.map((c, i) => ({ ...c, order: i + 1 }))];
-			setCards(updated);
-			triggerAutoSave(updated);
-
-			setPromptInput('');
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : 'Falha inesperada ao gerar indicador.';
+			const msg = err instanceof Error ? err.message : 'Falha na comunicação com o servidor ao gerar indicador.';
 			setErrorMessage(msg);
 		} finally {
 			setIsGenerating(false);
@@ -495,118 +342,31 @@ export default function UserDashboard() {
 		}
 	};
 
-	// Adicionar sugestão didática de 1 toque
+	// Adicionar sugestão didática de 1 toque consultando dados reais do PostgreSQL
 	const handleAddSuggestion = async (templateIndex: number) => {
 		const template = SUGGESTION_TEMPLATES[templateIndex];
 		if (!template) return;
 
 		// Verifica se já não existe um com mesmo título
-		const existing = cards.find((c) => c.title === template.title);
+		const existing = cards.find((c) => c.title.toLowerCase() === template.title.toLowerCase());
 		if (existing) {
 			setErrorMessage(`O indicador "${template.title}" já está adicionado no seu dashboard.`);
 			setTimeout(() => setErrorMessage(''), 4000);
 			return;
 		}
 
-		let createdId = generateCardId();
-		const token = localStorage.getItem('gideon.auth.token');
-
-		// Tenta criar no backend
-		try {
-			const response = await fetch('/api/dashboard/widgets', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					...(token ? { Authorization: `Bearer ${token}` } : {}),
-				},
-				body: JSON.stringify({
-					title: template.title,
-					type: template.chartType,
-					data: template.sampleConfig.data,
-					colSpan: template.size === 'P' ? 1 : template.size === 'M' ? 2 : 3,
-					rowSpan: 1,
-					queryPrompt: template.prompt,
-				}),
-			});
-
-			if (response.ok) {
-				const res = await response.json();
-				if (res.data?.id) {
-					createdId = res.data.id;
-				}
-			}
-		} catch {
-			// Prossegue com ID gerado localmente
-		}
-
-		const newCard: DashboardCard = {
-			id: createdId,
-			title: template.title,
-			prompt: template.prompt,
-			chartType: template.chartType,
-			size: template.size,
-			isExpandedHeight: false,
-			order: cards.length,
-			configString: JSON.stringify(template.sampleConfig),
-			lastRefreshedAt: new Date().toISOString(),
-		};
-
-		const updated = [...cards, newCard];
-		setCards(updated);
-		triggerAutoSave(updated);
+		await handleGenerateCard(template.prompt);
 	};
 
-	// Preencher o dashboard com todos os 3 indicadores com 1 clique
+	// Preencher o dashboard com todos os indicadores recomendados consultando dados reais
 	const handlePopulateAllSuggestions = async () => {
-		const newCards: DashboardCard[] = [];
-		const token = localStorage.getItem('gideon.auth.token');
-
-		for (let idx = 0; idx < SUGGESTION_TEMPLATES.length; idx++) {
-			const tpl = SUGGESTION_TEMPLATES[idx];
-			let cardId = generateCardId();
-
-			try {
-				const response = await fetch('/api/dashboard/widgets', {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						...(token ? { Authorization: `Bearer ${token}` } : {}),
-					},
-					body: JSON.stringify({
-						title: tpl.title,
-						type: tpl.chartType,
-						data: tpl.sampleConfig.data,
-						colSpan: tpl.size === 'P' ? 1 : tpl.size === 'M' ? 2 : 3,
-						rowSpan: 1,
-						queryPrompt: tpl.prompt,
-					}),
-				});
-
-				if (response.ok) {
-					const res = await response.json();
-					if (res.data?.id) {
-						cardId = res.data.id;
-					}
-				}
-			} catch {
-				// Segue com id local
+		if (isGenerating) return;
+		for (const tpl of SUGGESTION_TEMPLATES) {
+			const existing = cardsRef.current.find((c) => c.title.toLowerCase() === tpl.title.toLowerCase());
+			if (!existing) {
+				await handleGenerateCard(tpl.prompt);
 			}
-
-			newCards.push({
-				id: cardId,
-				title: tpl.title,
-				prompt: tpl.prompt,
-				chartType: tpl.chartType,
-				size: tpl.size,
-				isExpandedHeight: false,
-				order: idx,
-				configString: JSON.stringify(tpl.sampleConfig),
-				lastRefreshedAt: new Date().toISOString(),
-			});
 		}
-
-		setCards(newCards);
-		triggerAutoSave(newCards);
 	};
 
 	// Redimensionar card (P, M, G)
@@ -660,7 +420,7 @@ export default function UserDashboard() {
 		setDeletingCardId(null);
 	};
 
-	// Atualizar dados de um card individual
+	// Atualizar dados de um card individual consultando o PostgreSQL
 	const handleRefreshSingleCard = async (cardId: string) => {
 		const targetCard = cards.find((c) => c.id === cardId);
 		if (!targetCard) return;
@@ -669,51 +429,59 @@ export default function UserDashboard() {
 
 		try {
 			const token = localStorage.getItem('gideon.auth.token');
-			let refreshedConfigString: string | null = null;
+			const response = await fetch(`/api/dashboard/widgets/${cardId}/refresh`, {
+				method: 'POST',
+				headers: {
+					...(token ? { Authorization: `Bearer ${token}` } : {}),
+				},
+			});
 
-			// Tenta refresh via backend: POST /api/dashboard/widgets/:id/refresh
-			try {
-				const response = await fetch(`/api/dashboard/widgets/${cardId}/refresh`, {
-					method: 'POST',
-					headers: {
-						...(token ? { Authorization: `Bearer ${token}` } : {}),
-					},
+			const resData = await response.json().catch(() => null);
+
+			if (response.ok && resData?.data) {
+				const widget = resData.data;
+				const rows = Array.isArray(widget.data)
+					? widget.data
+					: Array.isArray(widget.cachedData?.data)
+						? widget.cachedData.data
+						: Array.isArray(widget.cachedData)
+							? widget.cachedData
+							: [];
+
+				const refreshedConfigString = JSON.stringify({
+					type: widget.type || targetCard.chartType,
+					title: widget.title || targetCard.title,
+					data: rows,
 				});
 
-				if (response.ok) {
-					const resData = await response.json();
-					const widget = resData.data;
-					if (widget && Array.isArray(widget.data)) {
-						refreshedConfigString = JSON.stringify({
-							type: widget.type,
-							title: widget.title,
-							data: widget.data,
-						});
-					}
-				}
-			} catch {
-				// Segue para fallback inteligente
+				const updated = cardsRef.current.map((c) =>
+					c.id === cardId
+						? {
+								...c,
+								configString: refreshedConfigString,
+								lastRefreshedAt: new Date().toISOString(),
+								isLoading: false,
+								error: undefined,
+							}
+						: c
+				);
+
+				setCards(updated);
+				triggerAutoSave(updated);
+			} else {
+				const errorMsg = resData?.error || 'Não foi possível atualizar este indicador no banco de dados.';
+				setCards((prev) =>
+					prev.map((c) =>
+						c.id === cardId
+							? {
+									...c,
+									isLoading: false,
+									error: errorMsg,
+								}
+							: c
+					)
+				);
 			}
-
-			if (!refreshedConfigString) {
-				await new Promise((r) => setTimeout(r, 500));
-				const fallback = generateSmartFallbackChart(targetCard.prompt);
-				refreshedConfigString = fallback.configString;
-			}
-
-			const updated = cardsRef.current.map((c) =>
-				c.id === cardId
-					? {
-							...c,
-							configString: refreshedConfigString!,
-							lastRefreshedAt: new Date().toISOString(),
-							isLoading: false,
-						}
-					: c
-			);
-
-			setCards(updated);
-			triggerAutoSave(updated);
 		} catch (err) {
 			setCards((prev) =>
 				prev.map((c) =>
@@ -1239,6 +1007,14 @@ export default function UserDashboard() {
 													<RefreshCw className="h-4 w-4 animate-spin text-indigo-600" />
 													<span>Atualizando dados do Sankhya ERP...</span>
 												</div>
+											</div>
+										)}
+
+										{/* Mensagem de erro de atualização individual */}
+										{card.error && (
+											<div className="mb-2 flex items-center gap-2 rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs text-rose-700 border border-rose-200">
+												<AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+												<span className="truncate">{card.error}</span>
 											</div>
 										)}
 

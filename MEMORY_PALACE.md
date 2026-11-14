@@ -305,3 +305,39 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/components/chat/DynamicDashboard.tsx`
   - `frontend/src/App.tsx`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Eliminação de Dados Mockados, Sanitização de Decimais e Blindagem de Gráficos no Dashboard
+- **Agentes Responsáveis:** `backend`, `frontend`, `tester`, `planner`
+- **Tipo:** `fix` / `perf` / `test`
+- **Contexto & Motivação:**
+  1. No painel "Seu Dashboard", dados fictícios/mockados estavam sendo exibidos quando não haviam registros ou durante a criação de novos indicadores/sugestões.
+  2. Gráficos no Chat e no Dashboard apresentavam o erro "Não foi possível renderizar este gráfico interativo." devido à serialização de instâncias `Decimal.js` do Prisma (`{ s, e, d }`) no lugar de números primitivos, e ausência de chaves estrangeiras cadastradas em `meta_columns` que quebrava os joins gerados pelo Text-to-SQL.
+- **Implementações Realizadas:**
+  1. **Eliminação Total de Fallbacks Mockados (`UserDashboard.tsx`):**
+     - Removida integralmente a função `generateSmartFallbackChart` e arrays com dados estáticos fictícios ("Atacadão Central", "Distribuidora Progresso", "PIX Instantâneo").
+     - As sugestões iniciais (`SUGGESTION_TEMPLATES`) agora invocam diretamente `handleGenerateCard(template.prompt)`, gerando gráficos com dados reais de `gideon_db` via pipeline RAG determinístico da Gideon.
+     - `handleGenerateCard` e `handleRefreshSingleCard` agora exibem feedback de erro real retornado pelo backend quando não existem registros, garantindo o princípio estrito de Zero-Alucinação.
+     - Sincronização correta do carregamento com `response.ok`, evitando ressuscitar cards antigos do `localStorage`.
+  2. **Sanitização de Tipos Numéricos (Decimal e BigInt) no Backend (`lgpd-sanitizer.ts`, `chat-rag.service.ts`, `user-dashboard.service.ts`):**
+     - Conversão automática de objetos `Decimal` (Prisma/Decimal.js) e `BigInt` para `number` nativo de JavaScript antes da serialização JSON.
+     - `formatWidgetForClient` unifica as propriedades `.data` e `.cachedData` garantindo compatibilidade no consumo da API pelo frontend.
+  3. **Blindagem do Recharts e Fallback Tabular no Frontend (`DynamicDashboard.tsx`, `ErrorBoundary.tsx`):**
+     - Reconstrução matemática exata de estruturas `{ s, e, d }` em `parseNumericValue` baseada no expoente decimal.
+     - Componente de barreira resiliente `SafeChartContainer` envolvendo todos os gráficos Recharts; em caso de falha de renderização SVG, um fallback tabular interativo e responsivo é exibido automaticamente sem quebrar o componente pai.
+     - `ErrorBoundary.tsx` atualizado com `componentDidUpdate` para resetar `hasError: false` quando novos `children` chegam, evitando que erros temporários durante o streaming SSE travem os cards permanentemente.
+  4. **Correção de Chaves Estrangeiras no Dicionário de Dados (`meta_columns`):**
+     - Cadastradas as FKs reais entre `erp_nota_fiscal`, `erp_nota_fiscal_prod`, `erp_clientes` e `erp_vendedores`, permitindo que o Text-to-SQL gere JOINs válidos e traga dados reais de faturamento e clientes.
+  5. **Configuração do Serviço PostgreSQL no Docker:**
+     - Container `gideon-postgres` configurado com `--restart no` para não iniciar automaticamente com o PC, rodando apenas sob demanda manual do usuário (`docker start gideon-postgres`).
+  6. **Garantia de Qualidade & Testes:**
+     - 70/70 testes unitários e de integração passando com 100% de sucesso.
+     - Build Vite do frontend (`npm run build`) concluído com zero erros de compilação.
+- **Arquivos Impactados:**
+  - `backend/src/services/chat-rag.service.ts`
+  - `backend/src/services/user-dashboard.service.ts`
+  - `backend/src/utils/lgpd-sanitizer.ts`
+  - `frontend/src/components/chat/DynamicDashboard.tsx`
+  - `frontend/src/components/common/ErrorBoundary.tsx`
+  - `frontend/src/pages/UserDashboard.tsx`
+  - `MEMORY_PALACE.md`

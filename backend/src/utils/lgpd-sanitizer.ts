@@ -153,7 +153,28 @@ export function sanitizeColumnValueForLgpd(columnName: string, value: unknown): 
 		);
 	}
 
-	if (typeof value === 'object' && !(value instanceof Date)) {
+	if (typeof value === 'bigint') {
+		const num = Number(value);
+		return Number.isSafeInteger(num) ? num : value.toString();
+	}
+
+	// 7. Conversão de instâncias de Decimal (PostgreSQL NUMERIC/Decimal.js) para números nativos
+	if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
+		if (typeof (value as any).toNumber === 'function') {
+			return (value as any).toNumber();
+		}
+		if ('d' in value && 's' in value && 'e' in value) {
+			const str = typeof (value as any).toString === 'function' && (value as any).toString() !== '[object Object]'
+				? (value as any).toString()
+				: null;
+			if (str) {
+				const num = Number(str);
+				if (Number.isFinite(num)) return num;
+			}
+			const dArr = Array.isArray((value as any).d) ? (value as any).d : [];
+			const num = Number(dArr.join('')) * ((value as any).s || 1);
+			if (Number.isFinite(num)) return num;
+		}
 		return sanitizeRowForLgpd(value as Record<string, unknown>);
 	}
 

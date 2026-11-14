@@ -33,6 +33,20 @@ export interface DashboardWidgetPayload {
 	data: unknown;
 }
 
+export function formatWidgetForClient(w: any) {
+	if (!w) return w;
+	const cached = w.cachedData;
+	const data = Array.isArray(cached?.data)
+		? cached.data
+		: Array.isArray(cached)
+			? cached
+			: [];
+	return {
+		...w,
+		data,
+	};
+}
+
 const VALID_WIDGET_TYPES: ReadonlySet<WidgetType> = new Set([
 	'bar',
 	'horizontal-bar',
@@ -81,7 +95,10 @@ export class UserDashboardService {
 			});
 		}
 
-		return dashboard;
+		return {
+			...dashboard,
+			widgets: dashboard.widgets.map(formatWidgetForClient),
+		};
 	}
 
 	/**
@@ -140,7 +157,7 @@ export class UserDashboardService {
 			},
 		});
 
-		return widget;
+		return formatWidgetForClient(widget);
 	}
 
 	/**
@@ -188,7 +205,7 @@ export class UserDashboardService {
 			},
 		});
 
-		return widget;
+		return formatWidgetForClient(widget);
 	}
 
 	/**
@@ -225,10 +242,11 @@ export class UserDashboardService {
 			),
 		);
 
-		return prismaClient.dashboardWidget.findMany({
+		const updatedWidgets = await prismaClient.dashboardWidget.findMany({
 			where: { dashboardId: dashboard.id },
 			orderBy: { order: 'asc' },
 		});
+		return updatedWidgets.map(formatWidgetForClient);
 	}
 
 	/**
@@ -250,7 +268,7 @@ export class UserDashboardService {
 		}
 
 		if (!widget.sqlQuery || !widget.sqlQuery.trim()) {
-			return widget;
+			return formatWidgetForClient(widget);
 		}
 
 		// Valida segurança da query antes de re-executar
@@ -278,13 +296,15 @@ export class UserDashboardService {
 			data: formattedData,
 		};
 
-		return prismaClient.dashboardWidget.update({
+		const updated = await prismaClient.dashboardWidget.update({
 			where: { id: widgetId },
 			data: {
 				cachedData: updatedCachedData as unknown as object,
 				updatedAt: new Date(),
 			},
 		});
+
+		return formatWidgetForClient(updated);
 	}
 
 	/**
@@ -465,10 +485,22 @@ ${JSON.stringify(sampleRows, (_k, v) => (typeof v === 'bigint' ? v.toString() : 
 		// Verifica se já possui o formato { name, value }
 		const first = rows[0];
 		if ('name' in first && 'value' in first) {
-			return rows.map((r) => ({
-				name: String(r.name ?? ''),
-				value: Number(r.value) || 0,
-			}));
+			return rows.map((r) => {
+				const v = r.value;
+				let num = 0;
+				if (typeof v === 'number') num = v;
+				else if (v && typeof v === 'object' && typeof (v as any).toNumber === 'function') num = (v as any).toNumber();
+				else if (v && typeof v === 'object' && 'd' in v) {
+					const str = String((v as any).d?.join?.('') || '0');
+					num = Number(str) * ((v as any).s || 1);
+				} else {
+					num = Number(v) || 0;
+				}
+				return {
+					name: String(r.name ?? ''),
+					value: Number.isNaN(num) ? 0 : num,
+				};
+			});
 		}
 
 		// Detecta coluna de rótulo (texto) e coluna de valor (número)
@@ -482,7 +514,17 @@ ${JSON.stringify(sampleRows, (_k, v) => (typeof v === 'bigint' ? v.toString() : 
 
 		return rows.map((row) => {
 			const rawVal = row[numericKey];
-			const numVal = typeof rawVal === 'number' ? rawVal : Number(rawVal);
+			let numVal: number;
+			if (typeof rawVal === 'number') {
+				numVal = rawVal;
+			} else if (rawVal && typeof rawVal === 'object' && typeof (rawVal as any).toNumber === 'function') {
+				numVal = (rawVal as any).toNumber();
+			} else if (rawVal && typeof rawVal === 'object' && 'd' in rawVal) {
+				const str = String((rawVal as any).d?.join?.('') || '0');
+				numVal = Number(str) * ((rawVal as any).s || 1);
+			} else {
+				numVal = Number(rawVal);
+			}
 
 			return {
 				name: String(row[labelKey] ?? 'Sem identificação'),

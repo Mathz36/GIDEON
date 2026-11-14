@@ -201,10 +201,16 @@ export class ChatRagService {
 			// 6. Sanitização LGPD obrigatória antes de serializar ou enviar ao LLM
 			const sanitizedRows = sanitizeRowsForLgpd(normalizedRows);
 
-			// Serializa com suporte a BigInt do Postgres
+			// Serializa com suporte a BigInt e Decimal do Postgres
 			const serializedRows = JSON.stringify(
 				sanitizedRows,
-				(_key, value) => (typeof value === 'bigint' ? value.toString() : value),
+				(_key, value) => {
+					if (typeof value === 'bigint') return value.toString();
+					if (value && typeof value === 'object' && typeof (value as any).toNumber === 'function') {
+						return (value as any).toNumber();
+					}
+					return value;
+				},
 				2,
 			);
 

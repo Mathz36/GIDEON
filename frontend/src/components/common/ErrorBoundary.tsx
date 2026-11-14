@@ -34,6 +34,16 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 		console.error('[ErrorBoundary] Erro de renderização capturado com sucesso:', error, errorInfo);
 	}
 
+	componentDidUpdate(prevProps: ErrorBoundaryProps): void {
+		if (
+			this.state.hasError &&
+			(prevProps.children !== this.props.children ||
+				prevProps.fallbackMessage !== this.props.fallbackMessage)
+		) {
+			this.setState({ hasError: false, error: null });
+		}
+	}
+
 	handleReset = (): void => {
 		this.setState({ hasError: false, error: null });
 		if (this.props.onReset) {
