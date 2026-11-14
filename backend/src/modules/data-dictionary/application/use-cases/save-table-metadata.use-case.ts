@@ -11,17 +11,19 @@ export class SaveTableMetadataUseCase {
 
 		const existing = await this.repository.findByTenantAndTableName(dto.tenantId, dto.tableName);
 
-		const columns = dto.columns.map(
-			(col) =>
-				new MetaColumnEntity({
-					columnName: col.columnName,
-					dataType: col.dataType ?? 'TEXT',
-					description: col.description,
-					isPrimaryKey: Boolean(col.isPrimaryKey),
-					foreignKeyToTable: col.foreignKeyToTable,
-					foreignKeyToColumn: col.foreignKeyToColumn,
-				}),
-		);
+		const columns = dto.columns.map((col) => {
+			const existingCol = existing?.findColumn(col.columnName);
+			return new MetaColumnEntity({
+				columnName: col.columnName,
+				dataType: col.dataType ?? existingCol?.dataType ?? 'TEXT',
+				description: col.description,
+				isPrimaryKey: Boolean(col.isPrimaryKey),
+				foreignKeyToTable:
+					col.foreignKeyToTable !== undefined ? col.foreignKeyToTable : existingCol?.foreignKeyToTable,
+				foreignKeyToColumn:
+					col.foreignKeyToColumn !== undefined ? col.foreignKeyToColumn : existingCol?.foreignKeyToColumn,
+			});
+		});
 
 		let metaTable: MetaTableEntity;
 

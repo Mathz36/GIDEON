@@ -408,3 +408,41 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`
   - `frontend/src/components/chat/DynamicDashboard.tsx`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Dicionário de Dados Obrigatório por Coluna, Auto-Profiler de Valores Categóricos (`OPERACAO = 'VENDAS'`) e Visualizador de Esquema Interativo (Diagrama ER)
+- **Agentes Responsáveis:** `planner`, `ai-specialist`, `backend`, `frontend`, `tester`
+- **Tipo:** `feat` / `fix` / `test`
+- **Contexto & Motivação:**
+  1. Ao consultar faturamento na tabela `erp_nota_fiscal`, a Gideon somava todas as notas fiscais indiscriminadamente porque a coluna `operacao` estava documentada de forma genérica (`"Coluna de dados OPERACAO da integração NOTA_FISCAL"`), sem especificar os 4 valores reais existentes no banco (`'VENDAS'`, `'BONIFICAÇÃO'`, `'DEVOLUÇÃO DE VENDAS'`, `'DEVOLUÇÃO DE BONIFICAÇÃO'`).
+  2. O usuário solicitou tornar **obrigatória** a descrição semântica da tabela e de todas as colunas na criação/edição de integrações ERP, além de criar uma aba de **Visualizador de Esquema & Diagrama ER** na tela de configuração do ERP (`AdminERP.tsx`) exibindo tabelas, PKs, FKs e permitindo inspecionar e editar descrições de tabelas/colunas clicando sobre cada tabela.
+- **Implementações Realizadas:**
+  1. **Dicionário Semântico Rico, Auto-Profiler Categórico e Regra `WHERE operacao = 'VENDAS'` (`erp-configuration.service.ts`, `build-sql-generation-prompt.use-case.ts`, `chat-rag.service.ts`):**
+     - Atualizado `generateColumnDescription` com semântica de negócio completa para todas as colunas ERP, documentando explicitamente `OPERACAO` (`['VENDAS', 'BONIFICAÇÃO', 'DEVOLUÇÃO DE VENDAS', 'DEVOLUÇÃO DE BONIFICAÇÃO']`) e a regra obrigatória `WHERE operacao = 'VENDAS'` para consultas de faturamento/vendas.
+     - Implementado `getSampleDistinctValues(tableName, columnName)` (Auto-Profiler no PostgreSQL) que amostra até 10 valores distintos reais para colunas categóricas (`operacao`, `tipo_movimento`, `status`, `tipo_pessoa`, `uf`, `ramo_de_atividade`, `classificacao`, `rede`) e os disponibiliza tanto no Dicionário da IA quanto no Inspetor do Diagrama ER.
+     - Enriquecidas todas as 6 tabelas sincronizadas (`erp_clientes`, `erp_clientes_vendedores`, `erp_nota_fiscal`, `erp_nota_fiscal_prod`, `erp_produtos`, `erp_vendedores`) em `meta_tables` / `meta_columns` e atualizados os widgets de faturamento no `dashboard_widgets` para filtrar `operacao = 'VENDAS'`.
+  2. **Auto-Detecção de Chaves Naturais e Preservação de FKs (`auto-detect-relationships.use-case.ts`, `save-table-metadata.use-case.ts`):**
+     - Registrada a chave natural `erp_nota_fiscal.nota_fiscal` no `AutoDetectRelationshipsUseCase`, conectando automaticamente `erp_nota_fiscal_prod.NOTA_FISCAL -> erp_nota_fiscal.NOTA_FISCAL` (totalizando 6 ligações FKs ativas entre as 6 tabelas).
+     - Atualizado `SaveTableMetadataUseCase` para preservar FKs existentes quando uma coluna tiver sua descrição atualizada sem reenvio explícito de FK.
+  3. **Novos Endpoints de Esquema e Extração SQL (`api.ts`):**
+     - `GET /api/erp/schema`: Retorna todas as tabelas do PostgreSQL, contagem de linhas real, PKs, FKs, descrições e amostras de valores categóricos.
+     - `PUT /api/erp/schema/:tableName`: Atualiza descrição da tabela, descrições obrigatórias das colunas, PK e FKs diretamente pelo Diagrama ER.
+     - `POST /api/erp/schema/auto-detect-fks`: Reexecuta a detecção automática de relacionamentos entre todas as tabelas do tenant.
+     - `POST /api/erp/extract-sql-columns`: Extrai automaticamente os aliases da cláusula `SELECT` e sugere descrições de negócio ricas para preenchimento rápido no modal.
+  4. **Visualizador de Esquema Interativo (Diagrama ER) e Descrições Obrigatórias no Modal (`SchemaDiagramExplorer.tsx`, `AdminERP.tsx`):**
+     - Criado `SchemaDiagramExplorer.tsx` com painel de métricas do esquema, barra interativa de relacionamentos FKs (`fromTable.fromColumn ➔ toTable.toColumn`), cards ER de cada tabela com badges `PK`/`FK` e valores reais do PostgreSQL, e Drawer lateral de inspeção/edição ao clicar em qualquer tabela (com botão de 1 clique para injetar valores reais do banco na descrição da coluna).
+     - Atualizado `AdminERP.tsx` com seletor de abas (*"Consultas & Sincronização ERP"* vs *"Visualizar Esquema & Dicionário IA (Diagrama ER / PKs / FKs)"*), botão *"Auto-extrair Colunas & Sugerir Descrições do SQL"* e validação obrigatória de descrição para a tabela e para cada coluna.
+  5. **Testes Automatizados (`smart-axis-and-sql-aliases.test.ts`):**
+     - Adicionados testes unitários validando a descrição semântica de `OPERACAO`, `isGenericColumnDescription` e `extractColumnsFromQuery`. Suíte total com **84/84 testes passando (0 falhas)** e build de produção do frontend concluído sem erros.
+- **Arquivos Impactados:**
+  - `backend/src/services/erp-configuration.service.ts`
+  - `backend/src/routes/api.ts`
+  - `backend/src/modules/data-dictionary/application/dtos/save-table-metadata.dto.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/save-table-metadata.use-case.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/auto-detect-relationships.use-case.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/build-sql-generation-prompt.use-case.ts`
+  - `backend/src/services/chat-rag.service.ts`
+  - `backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`
+  - `frontend/src/components/erp/SchemaDiagramExplorer.tsx`
+  - `frontend/src/pages/AdminERP.tsx`
+  - `MEMORY_PALACE.md`

@@ -188,16 +188,17 @@ export class ChatRagService {
      * Dia específico (02/09/2026): CAST(data_emissao AS DATE) = DATE '2026-09-02'
      * Mês específico (setembro/2026): CAST(data_emissao AS TIMESTAMP) >= DATE '2026-09-01' AND CAST(data_emissao AS TIMESTAMP) < DATE '2026-10-01'
      * Mês anterior: CAST(data_emissao AS TIMESTAMP) >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') AND CAST(data_emissao AS TIMESTAMP) < DATE_TRUNC('month', CURRENT_DATE)
-     * Evolução diária dentro de um mês (ex: evolução por dia em outubro/2026):
+     * Evolução diária dentro de um mês (ex: evolução do faturamento por dia em outubro/2026):
        SELECT TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'DD/MM') AS dia, SUM(CAST(valor_liquido AS NUMERIC)) AS faturamento_total
        FROM "erp_nota_fiscal"
-       WHERE CAST(data_emissao AS TIMESTAMP) >= DATE '2026-10-01' AND CAST(data_emissao AS TIMESTAMP) < DATE '2026-11-01'
+       WHERE operacao = 'VENDAS' AND CAST(data_emissao AS TIMESTAMP) >= DATE '2026-10-01' AND CAST(data_emissao AS TIMESTAMP) < DATE '2026-11-01'
        GROUP BY TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'DD/MM')
        ORDER BY MIN(CAST(data_emissao AS TIMESTAMP)) ASC
        LIMIT 31
      * Agrupar por mês: TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'MM/YYYY') AS mes ... ORDER BY MIN(CAST(data_emissao AS TIMESTAMP)) ASC
-2. TRATAMENTO DE VALORES NUMÉRICOS E ENGENHARIA DE EIXOS:
+2. TRATAMENTO DE VALORES NUMÉRICOS, OPERAÇÕES E ENGENHARIA DE EIXOS:
    - Colunas numéricas armazenadas como TEXT (ex: valor_bruto, valor_liquido, quantidade, peso) DEVEM receber CAST(coluna AS NUMERIC) ao usar SUM, AVG ou comparações numéricas (> ou <).
+   - REGRA CRÍTICA DE OPERAÇÃO COMERCIAL (COLUNA "operacao" EM "erp_nota_fiscal"): A coluna "operacao" possui os valores 'VENDAS', 'BONIFICAÇÃO', 'DEVOLUÇÃO DE VENDAS' e 'DEVOLUÇÃO DE BONIFICAÇÃO'. Sempre que o usuário perguntar sobre FATURAMENTO, VENDAS ou RECEITA, filtre OBRIGATORIAMENTE WHERE operacao = 'VENDAS' (não some bonificações nem devoluções junto com vendas, a menos que o usuário peça explicitamente bonificações ou devoluções).
    - PROIBIÇÃO CRÍTICA DE EIXOS: NUNCA use "nota_fiscal", "id", "pedido_origem" ou "cod_*" como substituto de data/dia no eixo X (ex: PROIBIDO fazer SELECT nota_fiscal AS dia). Para evolução diária, agrupe SEMPRE pela coluna de data formatada ('DD/MM'). Para faturamento/valor financeiro, some SEMPRE "valor_liquido" (ou "valor_bruto"), NUNCA "quantidade".`,
 			});
 

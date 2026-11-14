@@ -48,6 +48,16 @@ export class AutoDetectRelationshipsUseCase {
 					columnName: pkCol.columnName,
 				});
 			}
+			// Também registra chave natural nota_fiscal da tabela cabeçalho erp_nota_fiscal para ligar itens (erp_nota_fiscal_prod)
+			if (table.tableName.toLowerCase() === 'erp_nota_fiscal') {
+				const nfCol = table.findColumn('nota_fiscal');
+				if (nfCol) {
+					knownPks.set('nota_fiscal', {
+						tableName: table.tableName.toLowerCase(),
+						columnName: nfCol.columnName,
+					});
+				}
+			}
 		}
 
 		const detectedRelationships: DetectedRelationship[] = [];

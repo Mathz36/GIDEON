@@ -16,6 +16,10 @@ import {
 import { BuildSqlGenerationPromptUseCase } from '../modules/data-dictionary/application/use-cases/build-sql-generation-prompt.use-case';
 import { MetaTableEntity } from '../modules/data-dictionary/domain/entities/meta-table.entity';
 import { MetaColumnEntity } from '../modules/data-dictionary/domain/entities/meta-column.entity';
+import {
+	ErpConfigurationService,
+	isGenericColumnDescription,
+} from '../services/erp-configuration.service';
 
 describe('Smart Axis Engineering & SQL Alias Auto-Extractor Suite', () => {
 	describe('1. Auto-Extração de Aliases SQL (extractSqlSelectAliases & mergeExpectedFieldsWithQueryAliases)', () => {
@@ -125,6 +129,41 @@ GROUP BY NF.NUMERO_NOTA`;
 
 			assert.ok(out.systemPrompt.includes("TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'DD/MM')"));
 			assert.ok(out.systemPrompt.includes('PROIBIDO colocar nota_fiscal'));
+			assert.ok(out.systemPrompt.includes("WHERE operacao = 'VENDAS'"));
+		});
+	});
+
+	describe('4. Dicionário de Dados Rico & Auto-Extração de Descrições Semânticas (ErpConfigurationService)', () => {
+		it('deve documentar explicitamente os valores de OPERACAO (VENDAS, BONIFICAÇÃO, DEVOLUÇÃO) e a regra WHERE operacao = VENDAS', () => {
+			const service = new ErpConfigurationService();
+			const operacaoDesc = service.generateColumnDescription('OPERACAO', 'ID', 'NOTA_FISCAL');
+
+			assert.ok(operacaoDesc.includes("'VENDAS'"));
+			assert.ok(operacaoDesc.includes("'BONIFICAÇÃO'"));
+			assert.ok(operacaoDesc.includes("'DEVOLUÇÃO DE VENDAS'"));
+			assert.ok(operacaoDesc.includes("WHERE operacao = 'VENDAS'"));
+			assert.equal(isGenericColumnDescription(operacaoDesc), false);
+			assert.equal(
+				isGenericColumnDescription('Coluna de dados OPERACAO da integração NOTA_FISCAL'),
+				true,
+			);
+		});
+
+		it('deve extrair colunas da query SQL já com descrições semânticas prontas para o modal e Diagrama ER', () => {
+			const service = new ErpConfigurationService();
+			const extracted = service.extractColumnsFromQuery(
+				'SELECT NF.NUMERO_NOTA AS NOTA_FISCAL, NF.DESCROPER AS OPERACAO, SUM(NF.VALOR_LIQUIDO) AS VALOR_LIQUIDO FROM BI_NOTAS NF',
+				'NOTA_FISCAL',
+				'NOTA_FISCAL',
+			);
+
+			assert.equal(extracted.length, 3);
+			assert.equal(extracted[0]?.columnName, 'NOTA_FISCAL');
+			assert.ok(extracted[0]?.description.includes('[Chave Primária]'));
+			assert.equal(extracted[1]?.columnName, 'OPERACAO');
+			assert.ok(extracted[1]?.description.includes("WHERE operacao = 'VENDAS'"));
+			assert.equal(extracted[2]?.columnName, 'VALOR_LIQUIDO');
+			assert.ok(extracted[2]?.description.includes('SUM(CAST(valor_liquido AS NUMERIC))'));
 		});
 	});
 });

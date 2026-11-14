@@ -10,17 +10,20 @@ import {
 	Database,
 	Edit2,
 	Filter,
+	GitBranch,
 	Info,
 	KeyRound,
 	Layers,
 	Play,
 	Plus,
 	RefreshCw,
+	Sparkles,
 	Table as TableIcon,
 	Trash2,
 	X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import SchemaDiagramExplorer from '../components/erp/SchemaDiagramExplorer';
 
 export type SyncFrequency = 'MINUTES' | 'HOURS' | 'DAILY' | 'MONTHLY' | 'MANUAL';
 export type SyncStrategy = 'FULL' | 'HASH_COMPARATOR' | 'INCREMENTAL';
@@ -31,6 +34,7 @@ export interface ErpConfigurationPayload {
 	description: string;
 	query: string;
 	expectedFields: string[];
+	columnDescriptions?: Record<string, string>;
 	primaryKey?: string;
 	tableName?: string;
 	syncStrategy?: SyncStrategy;
@@ -120,9 +124,11 @@ function SqlEditor({ id, value, onChange }: SqlEditorProps) {
 
 export default function AdminERP() {
 	const { token } = useAuth();
+	const [activeTab, setActiveTab] = useState<'integrations' | 'schema'>('integrations');
 	const [configurations, setConfigurations] = useState<ErpConfigurationPayload[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [isSaving, setIsSaving] = useState(false);
+	const [isExtractingSql, setIsExtractingSql] = useState(false);
 	const [syncingId, setSyncingId] = useState<string | null>(null);
 	const [isModalOpen, setIsModalOpen] = useState(false);
 	const [editingConfig, setEditingConfig] = useState<ErpConfigurationPayload | null>(null);
@@ -132,6 +138,7 @@ export default function AdminERP() {
 	const [description, setDescription] = useState('');
 	const [query, setQuery] = useState('');
 	const [expectedFields, setExpectedFields] = useState<string[]>([createEmptyField()]);
+	const [columnDescriptions, setColumnDescriptions] = useState<Record<string, string>>({});
 	const [primaryKey, setPrimaryKey] = useState<string>('');
 
 	// Estados de Estratégia de Carga & Soft Delete
@@ -182,6 +189,7 @@ export default function AdminERP() {
 		setDescription('');
 		setQuery('');
 		setExpectedFields([createEmptyField()]);
+		setColumnDescriptions({});
 		setPrimaryKey('');
 		setSyncStrategy('FULL');
 		setBatchSize(1000);
@@ -206,6 +214,7 @@ export default function AdminERP() {
 		setDescription(config.description);
 		setQuery(config.query);
 		setExpectedFields([...config.expectedFields]);
+		setColumnDescriptions({ ...(config.columnDescriptions ?? {}) });
 		setPrimaryKey(config.primaryKey ?? (config.expectedFields[0] || ''));
 		setSyncStrategy(config.syncStrategy ?? 'FULL');
 		setBatchSize(config.batchSize ?? 1000);
@@ -226,6 +235,56 @@ export default function AdminERP() {
 		resetForm();
 	};
 
+	const handleExtractFromSql = async () => {
+		if (!query.trim()) {
+			setError('Preencha a Consulta SQL primeiro para extrair as colunas automaticamente.');
+			return;
+		}
+		setIsExtractingSql(true);
+		setError('');
+		try {
+			const res = await fetch('/api/erp/extract-sql-columns', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					...(token ? { Authorization: `Bearer ${token}` } : {}),
+				},
+				body: JSON.stringify({
+					query: query.trim(),
+					context: context.trim() || 'TABELA',
+					primaryKey: primaryKey.trim() || undefined,
+				}),
+			});
+			const json = (await res.json()) as {
+				data?: {
+					expectedFields: string[];
+					columnDescriptions: Record<string, string>;
+					suggestedPrimaryKey: string;
+				};
+				error?: string;
+			};
+			if (!res.ok || !json.data) {
+				throw new Error(json.error ?? 'Não foi possível extrair as colunas do SQL.');
+			}
+			if (json.data.expectedFields.length > 0) {
+				setExpectedFields(json.data.expectedFields);
+				setColumnDescriptions((prev) => ({
+					...json.data?.columnDescriptions,
+					...Object.fromEntries(
+						Object.entries(prev).filter(([, v]) => v && v.trim().length > 0),
+					),
+				}));
+				if (!primaryKey.trim() && json.data.suggestedPrimaryKey) {
+					setPrimaryKey(json.data.suggestedPrimaryKey);
+				}
+			}
+		} catch (err) {
+			setError(err instanceof Error ? err.message : 'Erro ao extrair colunas do SQL.');
+		} finally {
+			setIsExtractingSql(false);
+		}
+	};
+
 	const saveConfiguration = async (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		setError('');
@@ -235,6 +294,21 @@ export default function AdminERP() {
 
 		if (!context.trim() || !query.trim() || cleanFields.length === 0) {
 			setError('Informe o contexto, a query SQL e ao menos um campo esperado.');
+			return;
+		}
+
+		if (!description.trim()) {
+			setError('A descrição de negócio da tabela para a IA é obrigatória.');
+			return;
+		}
+
+		const missingDescFields = cleanFields.filter(
+			(field) => !(columnDescriptions[field.toUpperCase()] ?? columnDescriptions[field] ?? '').trim(),
+		);
+		if (missingDescFields.length > 0) {
+			setError(
+				`Para que o Dicionário de Dados da Gideon fique completo, preencha a descrição obrigatória de todas as colunas. Faltando: ${missingDescFields.join(', ')}. (Dica: use o botão "Auto-extrair Colunas & Sugerir Descrições do SQL")`,
+			);
 			return;
 		}
 
@@ -256,6 +330,14 @@ export default function AdminERP() {
 			return;
 		}
 
+		const normalizedDescriptions: Record<string, string> = {};
+		for (const field of cleanFields) {
+			const desc = (columnDescriptions[field.toUpperCase()] ?? columnDescriptions[field] ?? '').trim();
+			if (desc) {
+				normalizedDescriptions[field.toUpperCase()] = desc;
+			}
+		}
+
 		setIsSaving(true);
 		try {
 			const payload = {
@@ -263,6 +345,7 @@ export default function AdminERP() {
 				description: description.trim(),
 				query: query.trim(),
 				expectedFields: cleanFields,
+				columnDescriptions: normalizedDescriptions,
 				primaryKey: cleanPk,
 				syncStrategy,
 				batchSize: Number(batchSize) || 1000,
@@ -296,8 +379,8 @@ export default function AdminERP() {
 
 			setSuccessMsg(
 				isEdit
-					? `Integração e tabela "${json.data?.tableName}" atualizadas com sucesso no banco!`
-					: `Integração e tabela "${json.data?.tableName}" criadas com sucesso no banco!`,
+					? `Integração, Dicionário IA e tabela "${json.data?.tableName}" atualizados com sucesso no banco!`
+					: `Integração, Dicionário IA e tabela "${json.data?.tableName}" criados com sucesso no banco!`,
 			);
 
 			closeModal();
@@ -313,10 +396,32 @@ export default function AdminERP() {
 		const oldValue = expectedFields[index];
 		setExpectedFields((fields) => fields.map((field, fieldIndex) => (fieldIndex === index ? value : field)));
 
+		if (oldValue && oldValue.trim().toUpperCase() !== value.trim().toUpperCase()) {
+			const oldKey = oldValue.trim().toUpperCase();
+			const newKey = value.trim().toUpperCase();
+			setColumnDescriptions((prev) => {
+				if (!prev[oldKey]) return prev;
+				const next = { ...prev };
+				if (newKey && !next[newKey]) {
+					next[newKey] = next[oldKey];
+				}
+				return next;
+			});
+		}
+
 		// Se o campo alterado for a PK atual, atualiza o nome da PK
 		if (primaryKey && primaryKey.toUpperCase() === oldValue?.toUpperCase()) {
 			setPrimaryKey(value.trim());
 		}
+	};
+
+	const updateColumnDescription = (field: string, desc: string) => {
+		const key = field.trim().toUpperCase();
+		if (!key) return;
+		setColumnDescriptions((prev) => ({
+			...prev,
+			[key]: desc,
+		}));
 	};
 
 	const removeField = (index: number) => {
@@ -396,6 +501,7 @@ export default function AdminERP() {
 		setDescription(source.description);
 		setQuery(source.query);
 		setExpectedFields([...source.expectedFields]);
+		setColumnDescriptions({ ...(source.columnDescriptions ?? {}) });
 		setPrimaryKey(source.primaryKey ?? (source.expectedFields[0] || ''));
 		setSyncStrategy(source.syncStrategy ?? 'FULL');
 		setBatchSize(source.batchSize ?? 1000);
@@ -472,10 +578,10 @@ export default function AdminERP() {
 							<span>Integração ERP Sankhya & PostgreSQL</span>
 						</div>
 						<h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-							Consultas SQL, Tabelas & Agendamentos
+							Consultas SQL, Tabelas & Dicionário de Dados IA
 						</h1>
 						<p className="mt-1 text-sm text-slate-500">
-							Configure consultas no Sankhya, tabelas dinâmicas, Chave Primária (PK) e a frequência de sincronização automática.
+							Configure consultas no Sankhya, inspecione o Diagrama ER de tabelas/PKs/FKs e mantenha o Dicionário de Dados da Gideon completo.
 						</p>
 					</div>
 
@@ -486,6 +592,35 @@ export default function AdminERP() {
 					>
 						<Plus className="h-4 w-4" />
 						Nova Consulta SQL
+					</button>
+				</div>
+
+				{/* Seletor de Abas: Consultas ERP vs Visualizador de Esquema & Diagrama ER */}
+				<div className="mt-6 flex flex-wrap items-center gap-2 border-b border-slate-200 pb-4">
+					<button
+						type="button"
+						onClick={() => setActiveTab('integrations')}
+						className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition ${
+							activeTab === 'integrations'
+								? 'bg-indigo-600 text-white shadow-sm'
+								: 'bg-slate-100 text-slate-600 hover:bg-slate-200/70 hover:text-slate-900'
+						}`}
+					>
+						<Database className="h-4 w-4" />
+						<span>Consultas & Sincronização ERP ({configurations.length})</span>
+					</button>
+
+					<button
+						type="button"
+						onClick={() => setActiveTab('schema')}
+						className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition ${
+							activeTab === 'schema'
+								? 'bg-indigo-600 text-white shadow-sm'
+								: 'bg-slate-100 text-slate-600 hover:bg-slate-200/70 hover:text-slate-900'
+						}`}
+					>
+						<GitBranch className="h-4 w-4" />
+						<span>Visualizar Esquema & Dicionário IA (Diagrama ER / PKs / FKs)</span>
 					</button>
 				</div>
 
@@ -504,7 +639,9 @@ export default function AdminERP() {
 					</div>
 				)}
 
-				{isLoading ? (
+				{activeTab === 'schema' ? (
+					<SchemaDiagramExplorer token={token} />
+				) : isLoading ? (
 					<div className="flex flex-col items-center justify-center py-20">
 						<RefreshCw className="h-8 w-8 animate-spin text-indigo-600" />
 						<p className="mt-3 text-sm font-medium text-slate-500">Carregando integrações do banco de dados...</p>
@@ -619,17 +756,19 @@ export default function AdminERP() {
 											)}
 										</div>
 
-										{/* Colunas com destaque para PK */}
+										{/* Colunas com destaque para PK e tooltip da descrição */}
 										<div className="mt-3">
 											<span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-												Colunas:
+												Colunas ({config.expectedFields.length}):
 											</span>
 											<div className="mt-1 flex flex-wrap gap-1">
 												{config.expectedFields.map((field) => {
 													const isPk = config.primaryKey && field.toUpperCase() === config.primaryKey.toUpperCase();
+													const colDesc = config.columnDescriptions?.[field.toUpperCase()] ?? config.columnDescriptions?.[field];
 													return (
 														<span
 															key={field}
+															title={colDesc ? `${field}: ${colDesc}` : field}
 															className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 font-mono text-[10px] font-medium ${
 																isPk
 																	? 'bg-amber-100 text-amber-900 border border-amber-300 font-bold'
@@ -688,7 +827,7 @@ export default function AdminERP() {
 											<button
 												type="button"
 												onClick={() => openEditConfiguration(config)}
-												title="Editar consulta"
+												title="Editar consulta e dicionário de colunas"
 												className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600"
 											>
 												<Edit2 className="h-4 w-4" />
@@ -712,14 +851,14 @@ export default function AdminERP() {
 				{/* Modal de Criação / Edição */}
 				{isModalOpen && (
 					<div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
-						<div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+						<div className="w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
 							<div className="flex items-center justify-between border-b border-slate-200 pb-4">
 								<div>
 									<h2 className="text-lg font-bold text-slate-900">
-										{editingConfig ? 'Editar Consulta SQL do ERP' : 'Nova Consulta SQL do ERP'}
+										{editingConfig ? 'Editar Consulta SQL & Dicionário de Dados do ERP' : 'Nova Consulta SQL & Dicionário de Dados do ERP'}
 									</h2>
 									<p className="text-xs text-slate-500">
-										Defina a consulta SQL, as colunas, a Chave Primária (PK) e o agendamento de atualização.
+										Defina a consulta SQL, as colunas, a Chave Primária (PK) e a descrição obrigatória de cada campo para que a Gideon não erre regras de negócio.
 									</p>
 								</div>
 								<button
@@ -735,7 +874,7 @@ export default function AdminERP() {
 								<div className="grid gap-4 sm:grid-cols-2">
 									<div>
 										<label className="block text-xs font-semibold text-slate-700" htmlFor="context">
-											Contexto da Integração (Nome da Tabela)
+											Contexto da Integração (Nome da Tabela) <span className="text-rose-500">*</span>
 										</label>
 										<input
 											id="context"
@@ -743,21 +882,22 @@ export default function AdminERP() {
 											required
 											value={context}
 											onChange={(e) => setContext(e.target.value)}
-											placeholder="Ex: Pedidos de Compra, Clientes"
+											placeholder="Ex: NOTA_FISCAL, CLIENTES, PRODUTOS"
 											className="mt-1.5 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 outline-none"
 										/>
 									</div>
 
 									<div>
 										<label className="block text-xs font-semibold text-slate-700" htmlFor="description">
-											Descrição para a IA
+											Descrição de Negócio da Tabela para a IA <span className="text-rose-500">*</span>
 										</label>
 										<input
 											id="description"
 											type="text"
+											required
 											value={description}
 											onChange={(e) => setDescription(e.target.value)}
-											placeholder="Ex: Dados de clientes e limites para o Gideon consultar"
+											placeholder="Ex: Cabeçalho de notas fiscais (vendas, bonificações e devoluções)"
 											className="mt-1.5 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 outline-none"
 										/>
 									</div>
@@ -911,11 +1051,23 @@ export default function AdminERP() {
 								</div>
 
 								<div>
-									<div className="flex items-center justify-between">
+									<div className="flex flex-wrap items-center justify-between gap-2">
 										<label className="block text-xs font-semibold text-slate-700" htmlFor="query">
-											Consulta SQL no Sankhya (DbExplorer)
+											Consulta SQL no Sankhya (DbExplorer) <span className="text-rose-500">*</span>
 										</label>
-										<span className="text-[11px] text-slate-400">Suporte a syntax highlight</span>
+										<button
+											type="button"
+											onClick={handleExtractFromSql}
+											disabled={isExtractingSql || !query.trim()}
+											className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 border border-indigo-200 px-3 py-1 text-xs font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50 transition"
+										>
+											{isExtractingSql ? (
+												<RefreshCw className="h-3.5 w-3.5 animate-spin" />
+											) : (
+												<Sparkles className="h-3.5 w-3.5 text-indigo-600" />
+											)}
+											<span>Auto-extrair Colunas & Sugerir Descrições do SQL</span>
+										</button>
 									</div>
 									<div className="mt-1.5">
 										<SqlEditor id="query" value={query} onChange={setQuery} />
@@ -1069,27 +1221,39 @@ export default function AdminERP() {
 									</div>
 								</div>
 
-								{/* Seção de Colunas e Definição da Chave Primária (PK) */}
+								{/* Seção de Colunas, Descrições Obrigatórias e Definição da Chave Primária (PK) */}
 								<div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-4">
 									<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-3">
 										<div>
 											<div className="flex items-center gap-1.5 text-slate-800 font-semibold text-xs">
 												<KeyRound className="h-4 w-4 text-amber-500" />
-												<span>Colunas e Definição da Chave Primária (PK)</span>
+												<span>Colunas, Dicionário de Dados IA & Chave Primária (PK)</span>
 											</div>
 											<p className="text-[11px] text-slate-500 mt-0.5">
-												Adicione os campos retornados pela query e selecione exatamente uma coluna como Chave Primária.
+												Cada coluna exige uma descrição de negócio obrigatória (ex: valores válidos, se é venda/devolução/bonificação) para alimentar o Dicionário da Gideon.
 											</p>
 										</div>
 
-										<button
-											type="button"
-											onClick={() => setExpectedFields([...expectedFields, createEmptyField()])}
-											className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 self-start sm:self-center"
-										>
-											<Plus className="h-3.5 w-3.5" />
-											Adicionar Coluna
-										</button>
+										<div className="flex flex-wrap items-center gap-2">
+											<button
+												type="button"
+												onClick={handleExtractFromSql}
+												disabled={isExtractingSql || !query.trim()}
+												className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 border border-indigo-200 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+											>
+												<Sparkles className="h-3.5 w-3.5" />
+												<span>Auto-extrair do SQL</span>
+											</button>
+
+											<button
+												type="button"
+												onClick={() => setExpectedFields([...expectedFields, createEmptyField()])}
+												className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800"
+											>
+												<Plus className="h-3.5 w-3.5" />
+												Adicionar Coluna
+											</button>
+										</div>
 									</div>
 
 									{/* Seletor explícito de Chave Primária */}
@@ -1135,56 +1299,79 @@ export default function AdminERP() {
 										)}
 									</div>
 
-									{/* Grid de Inputs de Colunas com Botão Rápido de PK */}
-									<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3">
+									{/* Lista de Colunas com Nome, Seletor PK e Descrição Obrigatória */}
+									<div className="space-y-2.5">
 										{expectedFields.map((field, index) => {
-											const isThisPk = primaryKey && field.trim() && primaryKey.toUpperCase() === field.trim().toUpperCase();
+											const cleanField = field.trim().toUpperCase();
+											const isThisPk = primaryKey && cleanField && primaryKey.toUpperCase() === cleanField;
+											const currentDesc = cleanField
+												? (columnDescriptions[cleanField] ?? columnDescriptions[field.trim()] ?? '')
+												: '';
 
 											return (
 												<div
 													key={index}
-													className={`flex items-center gap-1.5 rounded-lg border p-1.5 transition ${
+													className={`flex flex-col gap-2 rounded-xl border p-2.5 transition sm:flex-row sm:items-center ${
 														isThisPk
 															? 'border-amber-400 bg-amber-50/90 shadow-xs ring-1 ring-amber-300'
 															: 'border-slate-300 bg-white hover:border-slate-400'
 													}`}
 												>
-													<button
-														type="button"
-														onClick={() => field.trim() && setPrimaryKey(field.trim())}
-														disabled={!field.trim()}
-														title={isThisPk ? 'Coluna atual é a Chave Primária' : 'Clique para definir esta coluna como PK'}
-														className={`flex items-center justify-center rounded-md px-1.5 py-1 text-[10px] font-bold transition ${
-															isThisPk
-																? 'bg-amber-500 text-white shadow-xs'
-																: field.trim()
-																? 'bg-slate-100 text-slate-400 hover:bg-amber-100 hover:text-amber-700'
-																: 'bg-slate-100 text-slate-300 cursor-not-allowed'
-														}`}
-													>
-														<KeyRound className="h-3 w-3 mr-0.5" />
-														{isThisPk ? 'PK' : 'Definir PK'}
-													</button>
-
-													<input
-														type="text"
-														value={field}
-														onChange={(e) => updateField(index, e.target.value)}
-														placeholder={`Coluna ${index + 1}`}
-														className={`w-full bg-transparent px-1.5 py-0.5 font-mono text-xs uppercase outline-none ${
-															isThisPk ? 'font-bold text-amber-950' : 'text-slate-800'
-														}`}
-													/>
-
-													{expectedFields.length > 1 && (
+													<div className="flex items-center gap-1.5 sm:w-56 shrink-0">
 														<button
 															type="button"
-															onClick={() => removeField(index)}
-															className="text-slate-400 hover:text-rose-500 p-0.5"
+															onClick={() => field.trim() && setPrimaryKey(field.trim())}
+															disabled={!field.trim()}
+															title={isThisPk ? 'Coluna atual é a Chave Primária' : 'Clique para definir esta coluna como PK'}
+															className={`flex items-center justify-center rounded-md px-2 py-1 text-[10px] font-bold transition shrink-0 ${
+																isThisPk
+																	? 'bg-amber-500 text-white shadow-xs'
+																	: field.trim()
+																	? 'bg-slate-100 text-slate-500 hover:bg-amber-100 hover:text-amber-700'
+																	: 'bg-slate-100 text-slate-300 cursor-not-allowed'
+															}`}
 														>
-															<X className="h-3.5 w-3.5" />
+															<KeyRound className="h-3 w-3 mr-0.5" />
+															{isThisPk ? 'PK' : 'PK'}
 														</button>
-													)}
+
+														<input
+															type="text"
+															value={field}
+															onChange={(e) => updateField(index, e.target.value)}
+															placeholder={`COLUNA_${index + 1}`}
+															className={`w-full rounded-md border border-slate-200 bg-slate-50/80 px-2 py-1 font-mono text-xs uppercase outline-none focus:border-indigo-500 focus:bg-white ${
+																isThisPk ? 'font-bold text-amber-950 border-amber-300' : 'text-slate-800'
+															}`}
+														/>
+													</div>
+
+													<div className="flex flex-1 items-center gap-2">
+														<input
+															type="text"
+															required={Boolean(cleanField)}
+															disabled={!cleanField}
+															value={currentDesc}
+															onChange={(e) => updateColumnDescription(field, e.target.value)}
+															placeholder="Descrição obrigatória para a IA (ex: Tipo da operação: 'VENDAS', 'BONIFICAÇÃO' ou 'DEVOLUÇÃO DE VENDAS') *"
+															className={`w-full rounded-lg border px-2.5 py-1 text-xs text-slate-800 outline-none transition ${
+																cleanField && !currentDesc.trim()
+																	? 'border-amber-300 bg-amber-50/30 focus:border-indigo-500 focus:bg-white'
+																	: 'border-slate-200 bg-white focus:border-indigo-500'
+															}`}
+														/>
+
+														{expectedFields.length > 1 && (
+															<button
+																type="button"
+																onClick={() => removeField(index)}
+																title="Remover coluna"
+																className="text-slate-400 hover:text-rose-500 p-1 shrink-0"
+															>
+																<X className="h-4 w-4" />
+															</button>
+														)}
+													</div>
 												</div>
 											);
 										})}
@@ -1205,7 +1392,7 @@ export default function AdminERP() {
 										className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:bg-slate-300"
 									>
 										{isSaving && <RefreshCw className="h-4 w-4 animate-spin" />}
-										{editingConfig ? 'Salvar Alterações' : 'Criar Tabela e Integração'}
+										{editingConfig ? 'Salvar Alterações & Dicionário IA' : 'Criar Tabela & Dicionário IA'}
 									</button>
 								</div>
 							</form>

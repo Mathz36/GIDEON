@@ -13,6 +13,7 @@ import prismaClient from '../config/prisma';
 import erpSyncScheduler from '../services/erp-sync.scheduler';
 import syncQueueManager from '../services/sync-queue.manager';
 import userDashboardService from '../services/user-dashboard.service';
+import { autoDetectRelationshipsUseCase } from '../modules/data-dictionary';
 
 interface ErpQueryBody {
 	query?: unknown;
@@ -30,6 +31,7 @@ interface ErpConfigurationBody {
 	description?: unknown;
 	query?: unknown;
 	expectedFields?: unknown;
+	columnDescriptions?: unknown;
 	primaryKey?: unknown;
 	syncStrategy?: unknown;
 	lastSyncCursor?: unknown;
@@ -114,7 +116,7 @@ apiRouter.post('/erp/configurations/:id/sync', requireAdmin, async (req: Request
 			return;
 		}
 
-		const result = await erpSyncScheduler.executeJob(config);
+		const result = await erpConfigurationService.syncNow(req.params.id);
 		res.status(200).json({
 			success: result.success,
 			message: result.message,
@@ -127,6 +129,68 @@ apiRouter.post('/erp/configurations/:id/sync', requireAdmin, async (req: Request
 
 apiRouter.get('/erp/queue', requireAdmin, (_req, res) => {
 	res.status(200).json({ data: syncQueueManager.getStatus() });
+});
+
+apiRouter.get('/erp/schema', requireAdmin, async (_req, res, next) => {
+	try {
+		const schema = await erpConfigurationService.getSchemaOverview();
+		res.status(200).json({ data: schema });
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.put('/erp/schema/:tableName', requireAdmin, async (req: Request<{ tableName: string }>, res, next) => {
+	try {
+		const body = req.body ?? {};
+		if (typeof body.description !== 'string' || !body.description.trim()) {
+			res.status(400).json({ error: 'A descrição da tabela é obrigatória.' });
+			return;
+		}
+		if (!Array.isArray(body.columns) || body.columns.length === 0) {
+			res.status(400).json({ error: 'A lista de colunas da tabela é obrigatória.' });
+			return;
+		}
+
+		const updatedTable = await erpConfigurationService.updateTableSchema(req.params.tableName, {
+			description: body.description,
+			columns: body.columns,
+		});
+		res.status(200).json({ data: updatedTable });
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.post('/erp/schema/auto-detect-fks', requireAdmin, async (_req, res, next) => {
+	try {
+		const detectionResult = await autoDetectRelationshipsUseCase.execute('default');
+		const schema = await erpConfigurationService.getSchemaOverview();
+		res.status(200).json({
+			data: schema,
+			detection: detectionResult,
+		});
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.post('/erp/extract-sql-columns', requireAdmin, async (req, res, next) => {
+	try {
+		const query = typeof req.body?.query === 'string' ? req.body.query : '';
+		const context = typeof req.body?.context === 'string' ? req.body.context : 'ERP';
+		const primaryKey = typeof req.body?.primaryKey === 'string' ? req.body.primaryKey : undefined;
+
+		if (!query.trim()) {
+			res.status(400).json({ error: 'Informe a consulta SQL para extrair as colunas.' });
+			return;
+		}
+
+		const columns = erpConfigurationService.extractColumnsFromQuery(query, context, primaryKey);
+		res.status(200).json({ data: columns });
+	} catch (error) {
+		next(error);
+	}
 });
 
 apiRouter.get('/ai/configurations', requireAdmin, async (_req, res, next) => {
@@ -514,11 +578,22 @@ function validateErpConfiguration(body: ErpConfigurationBody): ErpConfigurationI
 	const activeColumn = typeof body.activeColumn === 'string' ? body.activeColumn.trim() : undefined;
 	const activeValue = typeof body.activeValue === 'string' ? body.activeValue.trim() : undefined;
 
+	let columnDescriptions: Record<string, string> | undefined;
+	if (isRecord(body.columnDescriptions)) {
+		columnDescriptions = {};
+		for (const [k, v] of Object.entries(body.columnDescriptions)) {
+			if (typeof v === 'string' && v.trim()) {
+				columnDescriptions[k.trim().toUpperCase()] = v.trim();
+			}
+		}
+	}
+
 	return {
 		context: body.context.trim(),
 		description: typeof body.description === 'string' ? body.description.trim() : '',
 		query: body.query,
 		expectedFields: validateExpectedFields(body.expectedFields),
+		columnDescriptions,
 		primaryKey,
 		syncStrategy,
 		lastSyncCursor,
