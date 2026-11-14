@@ -18,6 +18,7 @@ import userDashboardService, {
 	isSaveChartToDashboardConfirmation,
 } from '../services/user-dashboard.service';
 import chatHistoryMemoryService, { MemoryCategory } from '../services/chat-history-memory.service';
+import chatFeedbackService from '../services/chat-feedback.service';
 import { autoDetectRelationshipsUseCase } from '../modules/data-dictionary';
 
 interface ErpQueryBody {
@@ -423,6 +424,113 @@ apiRouter.delete('/chat/memories/:id', requireAuth, async (req: Request<{ id: st
 	}
 });
 
+/* ==================== Rotas de Avaliação de Respostas (Feedback & Qualidade IA) ==================== */
+
+apiRouter.post('/chat/feedback', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const authReq = req as AuthenticatedRequest;
+		const userId = authReq.user?.id;
+		if (!userId) {
+			res.status(401).json({ error: 'Usuário não autenticado.' });
+			return;
+		}
+
+		const body = req.body ?? {};
+		const rawRating = typeof body.rating === 'string' ? body.rating.trim().toUpperCase() : '';
+		if (rawRating !== 'POSITIVE' && rawRating !== 'NEGATIVE') {
+			res.status(400).json({ error: 'O campo rating deve ser POSITIVE ou NEGATIVE.' });
+			return;
+		}
+
+		const assistantResponse =
+			typeof body.assistantResponse === 'string' ? body.assistantResponse.trim() : '';
+		if (!assistantResponse) {
+			res.status(400).json({ error: 'O conteúdo da resposta avaliada é obrigatório.' });
+			return;
+		}
+
+		const saved = await chatFeedbackService.submitOrUpdateFeedback({
+			userId,
+			conversationId: typeof body.conversationId === 'string' ? body.conversationId : null,
+			messageId: typeof body.messageId === 'string' ? body.messageId : null,
+			rating: rawRating,
+			tags: Array.isArray(body.tags) ? body.tags.map(String) : [],
+			comment: typeof body.comment === 'string' ? body.comment : null,
+			userPrompt: typeof body.userPrompt === 'string' ? body.userPrompt : '',
+			assistantResponse,
+			contextSummary: typeof body.contextSummary === 'string' ? body.contextSummary : null,
+			generatedSql: typeof body.generatedSql === 'string' ? body.generatedSql : null,
+			fullConversation: body.fullConversation,
+		});
+
+		res.status(201).json({ data: saved });
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.get('/admin/feedbacks', requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		const ratingQuery = typeof req.query.rating === 'string' ? req.query.rating.toUpperCase() : 'ALL';
+		const statusQuery = typeof req.query.status === 'string' ? req.query.status.toUpperCase() : 'ALL';
+		const searchQuery = typeof req.query.search === 'string' ? req.query.search : '';
+
+		const ratingFilter =
+			ratingQuery === 'POSITIVE' || ratingQuery === 'NEGATIVE' ? ratingQuery : 'ALL';
+		const statusFilter =
+			statusQuery === 'PENDING' || statusQuery === 'RESOLVED' ? statusQuery : 'ALL';
+
+		const [feedbacks, analytics] = await Promise.all([
+			chatFeedbackService.listFeedbacks({
+				rating: ratingFilter,
+				status: statusFilter,
+				search: searchQuery,
+			}),
+			chatFeedbackService.getDashboardAnalytics(),
+		]);
+
+		res.status(200).json({
+			data: {
+				feedbacks,
+				analytics,
+			},
+		});
+	} catch (error) {
+		next(error);
+	}
+});
+
+apiRouter.patch(
+	'/admin/feedbacks/:id/status',
+	requireAdmin,
+	async (req: Request<{ id: string }>, res: Response, next: NextFunction) => {
+		try {
+			const authReq = req as AuthenticatedRequest;
+			const rawStatus =
+				typeof req.body?.status === 'string' ? req.body.status.trim().toUpperCase() : '';
+			if (rawStatus !== 'PENDING' && rawStatus !== 'RESOLVED') {
+				res.status(400).json({ error: 'O status deve ser PENDING ou RESOLVED.' });
+				return;
+			}
+
+			const adminName = authReq.user?.nome || authReq.user?.email || 'Administrador';
+			const updated = await chatFeedbackService.updateFeedbackStatus(
+				req.params.id,
+				rawStatus,
+				adminName,
+			);
+
+			res.status(200).json({ data: updated });
+		} catch (error) {
+			if (error instanceof Error && error.message.includes('não encontrada')) {
+				res.status(404).json({ error: error.message });
+				return;
+			}
+			next(error);
+		}
+	},
+);
+
 apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>, unknown, ChatBody>, res, next) => {
 	try {
 		const authReq = req as AuthenticatedRequest;
@@ -676,6 +784,17 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 		}
 
 		const validatedText = appendSaveToDashboardQuestionIfChartPresent(reviewOutcome.finalResponse);
+
+		if (userId) {
+			chatFeedbackService.recordLastTurnMetadata(userId, {
+				generatedSql: ragResult.generatedSql,
+				contextSummary: chatFeedbackService.buildContextSummary(
+					lastUserMessage,
+					validatedText,
+					ragResult.generatedSql,
+				),
+			});
+		}
 
 		// Persiste o turno na conversa do usuário e executa compactação automática se atingir o limite (16 msgs / 12k chars)
 		if (userId && activeConversationId && lastUserMessage) {

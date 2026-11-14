@@ -75,6 +75,7 @@ const FORBIDDEN_SCHEMAS_AND_TABLES = [
 	'chat_conversations',
 	'chat_messages',
 	'user_memories',
+	'chat_feedbacks',
 	'_prisma_migrations',
 ] as const;
 

@@ -27,6 +27,8 @@ import {
 	Archive,
 	ChevronDown,
 	ChevronUp,
+	ThumbsUp,
+	ThumbsDown,
 } from 'lucide-react';
 import { DynamicDashboard } from '../components/chat/DynamicDashboard';
 import { ErrorBoundary } from '../components/common/ErrorBoundary';
@@ -319,11 +321,99 @@ interface ChatMessageItemProps {
 	message: ChatMessage;
 	isStreaming: boolean;
 	statusStep?: ChatStatusStep | null;
+	userPrompt?: string;
+	conversationId?: string | null;
+	fullConversationSnapshot?: ChatMessage[];
 }
 
+const POSITIVE_FEEDBACK_TAGS = [
+	'Números exatos',
+	'Excelente explicação',
+	'Gráfico muito útil',
+	'Rápida e direta',
+];
+
+const NEGATIVE_FEEDBACK_TAGS = [
+	'Valor divergente do ERP',
+	'Gráfico inadequado',
+	'Não entendeu a pergunta',
+	'Resposta incompleta',
+	'Outro motivo',
+];
+
 const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(
-	({ message, isStreaming, statusStep }) => {
+	({
+		message,
+		isStreaming,
+		statusStep,
+		userPrompt = '',
+		conversationId = null,
+		fullConversationSnapshot = [],
+	}) => {
 		const isUser = message.role === 'user';
+		const [selectedRating, setSelectedRating] = useState<'POSITIVE' | 'NEGATIVE' | null>(null);
+		const [selectedTags, setSelectedTags] = useState<string[]>([]);
+		const [comment, setComment] = useState('');
+		const [showDetailsForm, setShowDetailsForm] = useState(false);
+		const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
+		const [feedbackSaved, setFeedbackSaved] = useState(false);
+
+		const submitFeedbackToApi = async (
+			rating: 'POSITIVE' | 'NEGATIVE',
+			tagsToSend: string[],
+			commentToSend: string,
+		) => {
+			setIsSubmittingFeedback(true);
+			try {
+				const token = localStorage.getItem('gideon.auth.token');
+				await fetch('/api/chat/feedback', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						...(token ? { Authorization: `Bearer ${token}` } : {}),
+					},
+					body: JSON.stringify({
+						messageId: message.id,
+						conversationId,
+						rating,
+						tags: tagsToSend,
+						comment: commentToSend.trim() || null,
+						userPrompt,
+						assistantResponse: message.content,
+						fullConversation: fullConversationSnapshot.map((m) => ({
+							role: m.role,
+							content: m.content,
+							createdAt: m.createdAt,
+						})),
+					}),
+				});
+				setFeedbackSaved(true);
+			} catch {
+				// Silencioso para não interromper a experiência do chat
+			} finally {
+				setIsSubmittingFeedback(false);
+			}
+		};
+
+		const handleRateClick = (rating: 'POSITIVE' | 'NEGATIVE') => {
+			setSelectedRating(rating);
+			setSelectedTags([]);
+			setShowDetailsForm(true);
+			void submitFeedbackToApi(rating, [], comment);
+		};
+
+		const handleToggleTag = (tag: string) => {
+			setSelectedTags((prev) =>
+				prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+			);
+		};
+
+		const handleSaveDetailedFeedback = async (e: React.FormEvent) => {
+			e.preventDefault();
+			if (!selectedRating) return;
+			await submitFeedbackToApi(selectedRating, selectedTags, comment);
+			setShowDetailsForm(false);
+		};
 
 		return (
 			<div className={`flex gap-2.5 sm:gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -344,13 +434,130 @@ const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(
 				>
 					{!isUser ? (
 						message.content ? (
-							<div className="prose prose-sm prose-slate max-w-none break-words">
-								<ReactMarkdown components={markdownComponents}>{message.content}</ReactMarkdown>
-								{isStreaming && (
-									<span
-										className="ml-1 inline-block h-4 w-1.5 animate-pulse rounded-sm bg-indigo-600 align-middle"
-										aria-label="Gerando resposta"
-									/>
+							<div>
+								<div className="prose prose-sm prose-slate max-w-none break-words">
+									<ReactMarkdown components={markdownComponents}>{message.content}</ReactMarkdown>
+									{isStreaming && (
+										<span
+											className="ml-1 inline-block h-4 w-1.5 animate-pulse rounded-sm bg-indigo-600 align-middle"
+											aria-label="Gerando resposta"
+										/>
+									)}
+								</div>
+
+								{/* Barra de Avaliação da Resposta (exibida após finalizar o streaming) */}
+								{!isStreaming && (
+									<div className="mt-3 border-t border-slate-100 pt-2.5">
+										<div className="flex flex-wrap items-center justify-between gap-2">
+											<span className="text-[11px] font-medium text-slate-400">
+												{feedbackSaved && !showDetailsForm
+													? 'Obrigado! Sua avaliação foi registrada para evolução da Gideon.'
+													: 'Esta resposta foi útil?'}
+											</span>
+
+											<div className="flex items-center gap-1.5">
+												<button
+													type="button"
+													onClick={() => handleRateClick('POSITIVE')}
+													disabled={isSubmittingFeedback}
+													title="Avaliar positivamente (Resposta útil e precisa)"
+													className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition ${
+														selectedRating === 'POSITIVE'
+															? 'border-emerald-300 bg-emerald-50 text-emerald-700 font-semibold'
+															: 'border-slate-200 bg-slate-50/70 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50 hover:text-emerald-700'
+													}`}
+												>
+													<ThumbsUp className="h-3.5 w-3.5" />
+													<span>Útil</span>
+												</button>
+
+												<button
+													type="button"
+													onClick={() => handleRateClick('NEGATIVE')}
+													disabled={isSubmittingFeedback}
+													title="Avaliar negativamente (Precisa melhorar ou corrigir)"
+													className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition ${
+														selectedRating === 'NEGATIVE'
+															? 'border-rose-300 bg-rose-50 text-rose-700 font-semibold'
+															: 'border-slate-200 bg-slate-50/70 text-slate-600 hover:border-rose-200 hover:bg-rose-50/50 hover:text-rose-700'
+													}`}
+												>
+													<ThumbsDown className="h-3.5 w-3.5" />
+													<span>Precisa melhorar</span>
+												</button>
+											</div>
+										</div>
+
+										{/* Popover inline para complementar a avaliação com tags e comentário opcional */}
+										{showDetailsForm && selectedRating && (
+											<form
+												onSubmit={handleSaveDetailedFeedback}
+												className="mt-2.5 rounded-xl border border-slate-200 bg-slate-50/90 p-3 text-xs space-y-2.5"
+											>
+												<div className="flex items-center justify-between">
+													<span className="font-semibold text-slate-700">
+														{selectedRating === 'POSITIVE'
+															? '👍 O que você mais gostou nesta resposta? (Opcional)'
+															: '👎 O que podemos melhorar ou corrigir? (Opcional)'}
+													</span>
+													<button
+														type="button"
+														onClick={() => setShowDetailsForm(false)}
+														className="text-slate-400 hover:text-slate-600"
+														title="Fechar detalhes"
+													>
+														<X className="h-3.5 w-3.5" />
+													</button>
+												</div>
+
+												<div className="flex flex-wrap gap-1.5">
+													{(selectedRating === 'POSITIVE'
+														? POSITIVE_FEEDBACK_TAGS
+														: NEGATIVE_FEEDBACK_TAGS
+													).map((tag) => {
+														const isSelected = selectedTags.includes(tag);
+														return (
+															<button
+																key={tag}
+																type="button"
+																onClick={() => handleToggleTag(tag)}
+																className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+																	isSelected
+																		? selectedRating === 'POSITIVE'
+																			? 'border-emerald-400 bg-emerald-100 text-emerald-800'
+																			: 'border-rose-400 bg-rose-100 text-rose-800'
+																		: 'border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+																}`}
+															>
+																{tag}
+															</button>
+														);
+													})}
+												</div>
+
+												<div className="flex items-center gap-2">
+													<input
+														type="text"
+														value={comment}
+														onChange={(e) => setComment(e.target.value)}
+														placeholder={
+															selectedRating === 'POSITIVE'
+																? 'Comentário adicional (opcional)...'
+																: 'Descreva o erro ou orientação para revisão (opcional)...'
+														}
+														className="flex-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-indigo-500"
+													/>
+													<button
+														type="submit"
+														disabled={isSubmittingFeedback}
+														className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50"
+													>
+														Enviar
+													</button>
+												</div>
+											</form>
+										)}
+									</div>
 								)}
 							</div>
 						) : (
@@ -368,6 +575,7 @@ const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(
 		prevProps.message.content === nextProps.message.content &&
 		prevProps.message.role === nextProps.message.role &&
 		prevProps.isStreaming === nextProps.isStreaming &&
+		prevProps.conversationId === nextProps.conversationId &&
 		prevProps.statusStep?.step === nextProps.statusStep?.step &&
 		prevProps.statusStep?.title === nextProps.statusStep?.title
 );
@@ -910,18 +1118,29 @@ export default function Chat() {
 							</div>
 						)}
 
-						{messages.map((message) => (
-							<ChatMessageItem
-								key={message.id}
-								message={message}
-								isStreaming={isLoading && message.id === lastMessageId && message.role === 'assistant'}
-								statusStep={
-									isLoading && message.id === lastMessageId && message.role === 'assistant'
-										? statusStep
-										: null
-								}
-							/>
-						))}
+						{messages.map((message, index) => {
+							const precedingUserPrompt =
+								message.role === 'assistant'
+									? [...messages.slice(0, index)]
+											.reverse()
+											.find((m) => m.role === 'user')?.content ?? ''
+									: '';
+							return (
+								<ChatMessageItem
+									key={message.id}
+									message={message}
+									isStreaming={isLoading && message.id === lastMessageId && message.role === 'assistant'}
+									statusStep={
+										isLoading && message.id === lastMessageId && message.role === 'assistant'
+											? statusStep
+											: null
+									}
+									userPrompt={precedingUserPrompt}
+									conversationId={activeConversationId}
+									fullConversationSnapshot={messages.slice(0, index + 1)}
+								/>
+							);
+						})}
 						<div ref={bottomRef} />
 					</div>
 

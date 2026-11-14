@@ -99,8 +99,34 @@ model Usuario {
   dashboards      UserDashboard[]
   conversations   ChatConversation[]
   memories        UserMemory[]
+  feedbacks       ChatFeedback[]
 
   @@map("usuarios")
+}
+
+model ChatFeedback {
+  id                String    @id @default(uuid())
+  userId            String    @map("user_id")
+  conversationId    String?   @map("conversation_id")
+  messageId         String?   @map("message_id")
+  rating            String    // 'POSITIVE' | 'NEGATIVE'
+  tags              Json?     // Array de motivos/tags selecionados
+  comment           String?   @db.Text
+  userPrompt        String    @map("user_prompt") @db.Text
+  assistantResponse String    @map("assistant_response") @db.Text
+  contextSummary    String?   @map("context_summary") @db.Text
+  generatedSql      String?   @map("generated_sql") @db.Text
+  fullConversation  Json?     @map("full_conversation")
+  status            String    @default("PENDING") // 'PENDING' | 'RESOLVED'
+  resolvedAt        DateTime? @map("resolved_at")
+  resolvedBy        String?   @map("resolved_by")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  usuario           Usuario   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, createdAt])
+  @@index([rating, status, createdAt])
+  @@map("chat_feedbacks")
 }
 
 model ChatConversation {

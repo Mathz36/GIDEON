@@ -2,6 +2,7 @@ import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom';
 
 import AdminAI from './pages/AdminAI';
 import AdminERP from './pages/AdminERP';
+import AdminFeedbacks from './pages/AdminFeedbacks';
 import AdminUsers from './pages/AdminUsers';
 import Chat from './pages/Chat';
 import Login from './pages/Login';
@@ -9,7 +10,7 @@ import UserDashboard from './pages/UserDashboard';
 import ProtectedRoute from './components/ProtectedRoute';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { Bot, Database, LayoutDashboard, LogOut, MessageSquare, Shield, User as UserIcon, Users as UsersIcon } from 'lucide-react';
+import { Bot, Database, LayoutDashboard, LogOut, MessageSquare, Shield, ThumbsUp, User as UserIcon, Users as UsersIcon } from 'lucide-react';
 
 const navigationClass = ({ isActive }: { isActive: boolean }) => (
 	`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs sm:text-sm font-medium transition ${
@@ -64,6 +65,10 @@ function NavigationHeader() {
 							<NavLink className={navigationClass} to="/admin/ai">
 								<Bot className="h-4 w-4 text-violet-600" />
 								<span className="hidden md:inline">Configurações</span> IA
+							</NavLink>
+							<NavLink className={navigationClass} to="/admin/feedbacks">
+								<ThumbsUp className="h-4 w-4 text-rose-500" />
+								<span>Feedbacks</span>
 							</NavLink>
 							<NavLink className={navigationClass} to="/admin/users">
 								<UsersIcon className="h-4 w-4 text-sky-600" />
@@ -142,6 +147,14 @@ export default function App() {
 									element={
 										<ProtectedRoute requiredRole="ADMIN">
 											<AdminAI />
+										</ProtectedRoute>
+									}
+								/>
+								<Route
+									path="/admin/feedbacks"
+									element={
+										<ProtectedRoute requiredRole="ADMIN">
+											<AdminFeedbacks />
 										</ProtectedRoute>
 									}
 								/>

@@ -632,3 +632,27 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/hooks/useChat.ts`
   - `backend/src/__tests__/user-dashboard.service.test.ts`
   - `MEMORY_PALACE.md`
+
+### [2026-11-14] — Sistema de Avaliação de Respostas no Chat (`chat_feedbacks`) e Dashboard de Qualidade & Curadoria da IA (`/admin/feedbacks`)
+- **Agente:** Planner & Full-Stack Squad
+- **Ação:**
+  1. **Persistência de Feedbacks (`chat_feedbacks`):**
+     - Criado modelo `ChatFeedback` (`chat_feedbacks`) em `backend/prisma/schema.prisma` e inicialização idempotente via `ChatFeedbackService.ensureSchemaInitialized()` em `backend/src/services/chat-feedback.service.ts` (preservando intactas as tabelas dinâmicas `erp_*`).
+     - Armazena o usuário que avaliou (`user_id`), avaliação (`POSITIVE` ou `NEGATIVE`), tags/motivos (`tags`), comentário opcional (`comment`), resumo automático do contexto (`context_summary`), pergunta (`user_prompt`), resposta (`assistant_response`), query SQL gerada (`generated_sql`), snapshot da conversa completa (`full_conversation` JSON) e status de revisão manual (`PENDING` / `RESOLVED`).
+     - Adicionada `'chat_feedbacks'` à blocklist `FORBIDDEN_SCHEMAS_AND_TABLES` em `backend/src/services/chat-rag.service.ts`.
+  2. **Avaliação no Chat (`frontend/src/pages/Chat.tsx`):**
+     - Adicionada barra interativa `👍 Útil` / `👎 Precisa melhorar` abaixo de cada resposta da Gideon no chat, com gravação imediata em 1 clique e painel expansível opcional para escolha rápida de tags (`Valor / Cálculo incorreto`, `Faltou considerar devolução`, `Resposta exata e rápida`, etc.) e comentário.
+  3. **Painel & Dashboard Executivo de Feedbacks (`/admin/feedbacks` — `frontend/src/pages/AdminFeedbacks.tsx`):**
+     - Criada tela administrativa com KPIs (`% Positivos vs Negativos`, `Total de Avaliações`, `Pendentes de Revisão`), Gráfico de Tendência de Feedbacks ao longo do tempo (`AreaChart`), Ranking de Usuários que Mais Avaliam (`BarChart` + lista), distribuição de motivos/tags, filtros combinados (`Todos`, `Negativos`, `Positivos`, `Pendentes`, `Resolvidos`), botão de 1 clique **"Marcar como Resolvido"** (sem automação cega) e modal de inspeção da **Conversa Completa + SQL**.
+  4. **Testes Automatizados (`backend/src/__tests__/chat-feedback.test.ts`):**
+     - Adicionados testes unitários cobrindo criação/atualização de feedbacks, filtros, resolução manual, cálculo de analytics e proteção Text-to-SQL (`113/113` testes passando).
+- **Arquivos Afetados:**
+  - `backend/prisma/schema.prisma`
+  - `backend/src/services/chat-feedback.service.ts`
+  - `backend/src/services/chat-rag.service.ts`
+  - `backend/src/routes/api.ts`
+  - `backend/src/__tests__/chat-feedback.test.ts`
+  - `frontend/src/pages/Chat.tsx`
+  - `frontend/src/pages/AdminFeedbacks.tsx`
+  - `frontend/src/App.tsx`
+  - `MEMORY_PALACE.md`
