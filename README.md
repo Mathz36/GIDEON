@@ -1,8 +1,8 @@
 # 🛡️ Gideon — Inteligência Artificial Corporativa & RAG Text-to-SQL para Sankhya ERP
 
-O **Gideon** é uma plataforma corporativa completa de **Inteligência Artificial Generativa e RAG (Retrieval-Augmented Generation)** integrada diretamente ao **Sankhya ERP**. 
+O **Gideon** é uma plataforma corporativa completa de **Inteligência Artificial Generativa e RAG (Retrieval-Augmented Generation)** integrada nativamente ao **Sankhya ERP**.
 
-A solução permite que gestores, diretores e gerentes comerciais consultem dados de clientes, vendas, estoque, crédito e faturamento em **linguagem natural** através de uma interface de chat conversacional fluida (com respostas em tempo real via streaming SSE), transformando automaticamente perguntas em consultas SQL seguras no PostgreSQL e respondendo com dados reais, análises e insights estratégicos.
+A solução permite que diretores, gerentes comerciais e equipes de gestão consultem dados estratégicos de vendas, clientes, financeiro, estoque e faturamento em **linguagem natural** através de uma interface conversacional moderna em tempo real (via streaming SSE), transformando automaticamente perguntas em consultas SQL seguras no PostgreSQL e respondendo com dados reais, gráficos interativos (Generative UI) e insights analíticos.
 
 ---
 
@@ -10,414 +10,308 @@ A solução permite que gestores, diretores e gerentes comerciais consultem dado
 
 1. [Visão Geral e Proposta de Valor](#1-visão-geral-e-proposta-de-valor)
 2. [Arquitetura Geral do Sistema](#2-arquitetura-geral-do-sistema)
-3. [Pipeline RAG com Expansão de Contexto & Text-to-SQL](#3-pipeline-rag-com-expansão-de-contexto--text-to-sql)
-4. [Dicionário de Dados Dinâmico & Multi-tenant](#4-dicionário-de-dados-dinâmico--multi-tenant)
-5. [Mecanismo Dinâmico de Tabelas & Agendador ERP](#5-mecanismo-dinâmico-de-tabelas--agendador-erp)
-6. [Módulo de Segurança, Autenticação & RBAC](#6-módulo-de-segurança-autenticação--rbac)
-7. [Referência Completa de Endpoints da API](#7-referência-completa-de-endpoints-da-api)
-8. [Modelagem de Dados (Prisma & PostgreSQL)](#8-modelagem-de-dados-prisma--postgresql)
-9. [Arquitetura Frontend (SPA)](#9-arquitetura-frontend-spa)
-   - [9.1. Generative UI — Dashboards & Gráficos Interativos (Recharts)](#91-generative-ui--dashboards--gráficos-interativos-recharts)
-10. [Variáveis de Ambiente e Configuração](#10-variáveis-de-ambiente-e-configuração)
-11. [Guia de Instalação e Execução Local](#11-guia-de-instalação-e-execução-local)
+3. [Pipeline RAG Text-to-SQL & Generative UI](#3-pipeline-rag-text-to-sql--generative-ui)
+4. [Multi-Conversas FIFO, Compactação & Memória Pessoal](#4-multi-conversas-fifo-compactação--memória-pessoal)
+5. [Seu Dashboard — Indicadores & Gráficos Personalizados](#5-seu-dashboard--indicadores--gráficos-personalizados)
+6. [Sistema de Avaliação de Respostas & Qualidade da IA](#6-sistema-de-avaliação-de-respostas--qualidade-da-ia)
+7. [Dicionário de Dados Dinâmico & Sincronizador ERP](#7-dicionário-de-dados-dinâmico--sincronizador-erp)
+8. [Módulo de Segurança, Autenticação & RBAC](#8-módulo-de-segurança-autenticação--rbac)
+9. [Referência Completa de Endpoints da API](#9-referência-completa-de-endpoints-da-api)
+10. [Modelagem de Dados (Prisma & PostgreSQL)](#10-modelagem-de-dados-prisma--postgresql)
+11. [Arquitetura Frontend (SPA) & Telas do Sistema](#11-arquitetura-frontend-spa--telas-do-sistema)
+12. [Variáveis de Ambiente e Configuração](#12-variáveis-de-ambiente-e-configuração)
+13. [Guia de Instalação e Execução Local](#13-guia-de-instalação-e-execução-local)
 
 ---
 
 ## 1. Visão Geral e Proposta de Valor
 
 ### O Desafio
-Consultar bancos legados de ERPs robustos como o Sankhya normalmente exige conhecimento técnico avançado em SQL, navegação por menus burocráticos e entendimento das nomenclaturas das tabelas e campos internos (ex: `TGFPAR`, `TGFVEN`, `CODPARC`, `AD_RAMOATIV`).
+Consultar bancos legados de ERPs robustos como o Sankhya exige conhecimento técnico avançado em SQL, navegação por menus burocráticos e entendimento das nomenclaturas internas das tabelas e campos (ex: `TGFPAR`, `TGFVEN`, `TGFCAB`, `TGFITE`, `CODPARC`, `VLRNOTA`, `VLRDESC`).
 
 ### A Solução Gideon
-O Gideon atua como um agente intermediário autônomo entre o usuário de negócios e o banco de dados corporativo:
-- **Linguagem Natural:** O gerente simplesmente digita: *"Quais são os dados e o histórico do cliente 11096?"* ou *"Quais clientes da rede AGROPEC têm maior limite de crédito?"*.
-- **Sem Alucinações ou Placeholders:** O motor RAG localiza as tabelas pertinentes no banco PostgreSQL interno, gera a query SQL otimizada, executa-a no banco e fornece os dados reais para o LLM responder com números, nomes e recomendações consultivas concretas.
-- **Sincronização Programada:** As tabelas internas são alimentadas por integrações periódicas customizáveis com o gateway `DbExplorerSP` da API Sankhya.
-- **Diferenciação Estrita de Perfis (RBAC):**
-  - **Gerente:** Experiência 100% focada no Chat. Nenhum menu ou rota de configuração é exposto ao gerente.
-  - **Administrador:** Controle total da plataforma (Chat, Integrações do ERP, Parâmetros da IA e Gestão de Usuários).
+O Gideon atua como um analista autônomo e assistente estratégico entre o usuário de negócios e o banco de dados corporativo:
+- **Linguagem Natural Sem Alucinações:** O gerente digita *"Qual foi o faturamento líquido de outubro?"* ou *"Top 5 produtos mais vendidos da filial 1"*. O motor RAG localiza as tabelas, constrói a query SQL, executa-a no banco com regras estritas (ex: dedução de devoluções e cancelamentos) e devolve a resposta contextualizada com números exatos.
+- **Generative UI & Visualização de Dados:** Respostas com comparações, séries temporais ou rankings geram gráficos interativos em tempo real (`bar`, `horizontal-bar`, `line`, `area`, `pie` ou `table`).
+- **Histórico Multi-Conversa & Memória Pessoal:** Fila FIFO de até 10 conversas por usuário, compactação automática de conversas longas e memória interna persistente das preferências de cada pessoa.
+- **Seu Dashboard Integrado:** O usuário pode salvar qualquer gráfico gerado no chat diretamente em seu dashboard individual de indicadores com o mesmo layout e refresh dinâmico.
+- **Auditoria de Qualidade & Feedback Humano:** Mecanismo de avaliação 👍 / 👎 com tags de diagnóstico e central administrativa de curadoria com métricas de evolução temporal.
+- **Controle de Acesso Baseado em Perfis (RBAC):**
+  - **Gerente:** Acesso focado ao Chat e ao Seu Dashboard, com isolamento total dos seus dados.
+  - **Administrador:** Acesso irrestrito a Chat, Dashboard, Integrações do ERP Sankhya, Parâmetros da IA, Central de Feedbacks e Gestão de Usuários.
 
 ---
 
 ## 2. Arquitetura Geral do Sistema
 
-O Gideon foi desenhado seguindo princípios de **Clean Architecture** (Arquitetura Limpa), separação estrita de responsabilidades, injeção de dependências e programação orientada a objetos (POO).
+O sistema é estruturado em **Clean Architecture**, com separação estrita de camadas, injeção de dependências e tipagem robusta ponta a ponta.
 
 ```
-                        ┌───────────────────────────────────────────────────┐
-                        │             Frontend SPA (React 19)               │
-                        │  Vite + Tailwind CSS + Context API + Lucide Icons │
-                        └─────────┬───────────────────────────────┬─────────┘
-                                  │ HTTP / JSON                   │ SSE Stream
-                                  ▼                               ▼
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│                           Backend API (Node.js & Express)                         │
-│                                                                                   │
-│  ┌───────────────────────────────┐     ┌───────────────────────────────────────┐  │
-│  │     Módulo de Autenticação    │     │       Módulo de Gestão de Usuários    │  │
-│  │   JWT + bcrypt + RBAC Guards  │     │       CRUD Completo (Admin-only)      │  │
-│  └───────────────────────────────┘     └───────────────────────────────────────┘  │
-│                                                                                   │
-│  ┌─────────────────────────────────────────────────────────────────────────────┐  │
-│  │            Pipeline RAG Text-to-SQL (Clean Architecture)                    │  │
-│  │  1. ExtractKeywordsUseCase -> 2. SearchMetadataUseCase                       │  │
-│  │  3. ExpandRelationshipsUseCase -> 4. BuildSqlGenerationPromptUseCase        │  │
-│  │  5. ChatRagService (Geração, Validação Read-Only e Execução Postgres)       │  │
-│  └─────────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                   │
-│  ┌───────────────────────────────┐     ┌───────────────────────────────────────┐  │
-│  │    DynamicTableManager        │     │         ErpSyncScheduler              │  │
-│  │  Criação DDL, Sanitização     │     │  Agendamento Inteligente (Cron-like)  │  │
-│  │  Bulk Inserts Parametrizados  │     │  Loop assíncrono a cada 30 segundos   │  │
-│  └──────────────┬────────────────┘     └───────────────────┬───────────────────┘  │
-└─────────────────┼──────────────────────────────────────────┼──────────────────────┘
+                        ┌─────────────────────────────────────────────────────────┐
+                        │                 Frontend SPA (React 19)                 │
+                        │    Vite + Tailwind CSS + Recharts + Lucide Icons        │
+                        │  - Chat Conversacional com Sidebar ChatGPT-style        │
+                        │  - "Seu Dashboard" com Grid Responsivo & Auto-Save      │
+                        │  - Painel Admin: ERP, Config IA, Feedbacks & Usuários   │
+                        └────────────┬───────────────────────────────┬─────────────┘
+                                     │ HTTP / REST                   │ SSE Stream
+                                     ▼                               ▼
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                             Backend API (Node.js & Express)                              │
+│                                                                                          │
+│  ┌───────────────────────────────┐     ┌──────────────────────────────────────────────┐  │
+│  │   Autenticação & RBAC         │     │         Multi-Conversa & Memória             │  │
+│  │   JWT + bcrypt + Permissões   │     │   FIFO 10 conversas + Rolling Compaction     │  │
+│  └───────────────────────────────┘     │   Extração e injeção de memórias do usuário  │  │
+│                                        └──────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                     Pipeline RAG Text-to-SQL & Generative UI                       │  │
+│  │  1. ExtractKeywordsUseCase -> 2. SearchMetadataUseCase                             │  │
+│  │  3. ExpandRelationshipsUseCase -> 4. BuildSqlGenerationPromptUseCase               │  │
+│  │  5. Gemini LLM (Text-to-SQL) -> 6. Validação Read-Only Segura                      │  │
+│  │  7. Execução Postgres -> 8. ResponseReviewerService (Geração & Auto-Correção)      │  │
+│  └────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                          │
+│  ┌───────────────────────────────┐     ┌──────────────────────────────────────────────┐  │
+│  │      "Seu Dashboard"          │     │        Avaliação & Curadoria (Feedbacks)     │  │
+│  │   Salvar Gráfico do Chat      │     │   Armazenamento de contexto, query e snapshot│  │
+│  │   Refresh SQL em Tempo Real   │     │   Dashboard de tendências & resolução manual │  │
+│  └───────────────────────────────┘     └──────────────────────────────────────────────┘  │
+│                                                                                          │
+│  ┌───────────────────────────────┐     ┌──────────────────────────────────────────────┐  │
+│  │    DynamicTableManager        │     │         ErpSyncScheduler & Queue             │  │
+│  │  Criação DDL, Sanitização     │     │  Agendamento Inteligente (Cron-like)         │  │
+│  │  Sync FULL e HASH_COMPARATOR  │     │  Fila com controle de concorrência           │  │
+│  └──────────────┬────────────────┘     └───────────────────┬──────────────────────────┘  │
+└─────────────────┼──────────────────────────────────────────┼─────────────────────────────┘
                   │                                          │
                   │ PostgreSQL (Prisma ORM)                  │ Gateway REST / JSON
                   ▼                                          ▼
-   ┌──────────────────────────────┐          ┌──────────────────────────────┐
-   │    Banco de Dados Interno    │          │      Sankhya ERP Gateway     │
-   │  - usuarios                  │          │  - Autenticação OAuth2       │
-   │  - ai_configurations         │          │  - DbExplorerSP.executeQuery │
-   │  - erp_configurations        │          └──────────────────────────────┘
-   │  - meta_tables/meta_columns  │
-   │  - Tabelas dinâmicas (erp_*) │
-   └──────────────────────────────┘
+   ┌────────────────────────────────────────┐     ┌──────────────────────────────────────┐
+   │         Banco de Dados Interno         │     │         Sankhya ERP Gateway          │
+   │  - usuarios, ai_configurations         │     │  - Autenticação OAuth2 / Token       │
+   │  - erp_configurations, meta_tables/cols│     │  - DbExplorerSP.executeQuery         │
+   │  - chat_conversations, chat_messages   │     └──────────────────────────────────────┘
+   │  - user_memories, chat_feedbacks       │
+   │  - user_dashboards, dashboard_widgets  │
+   │  - Tabelas dinâmicas espelho (erp_*)   │
+   └────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Pipeline RAG com Expansão de Contexto & Text-to-SQL
+## 3. Pipeline RAG Text-to-SQL & Generative UI
 
-O coração da assertividade do Gideon está localizado em `backend/src/modules/data-dictionary` e `backend/src/services/chat-rag.service.ts`.
+O motor RAG garante que perguntas em linguagem natural sejam convertidas em dados auditáveis sem depender de adivinhações do LLM.
 
-Quando o usuário envia uma mensagem no chat, o pipeline executa o seguinte fluxo determinístico:
-
-```
- Pergunta do Usuário
-        │
-        ▼
- 1. [ExtractKeywordsUseCase] ──────────► Extrai palavras-chave, entidades e filtros
-        │
-        ▼
- 2. [SearchMetadataUseCase] ───────────► Busca tabelas e colunas candidatas no Dicionário
-        │
-        ▼
- 3. [ExpandRelationshipsUseCase] ─────► Identifica Chaves Estrangeiras (FKs) e traz tabelas
-        │                                relacionadas automaticamente para viabilizar JOINs
-        ▼
- 4. [BuildSqlGenerationPromptUseCase] ─► Constrói um pseudo-DDL simplificado com as PKs e tipos
-        │
-        ▼
- 5. [Gemini LLM] ─────────────────────► Gera query SQL estrita para PostgreSQL
-        │
-        ▼
- 6. [Validação de Segurança] ──────────► Garante que a query inicia com SELECT/WITH,
-        │                                bloqueia qualquer comando DDL/DML e anexa LIMIT 50
-        ▼
- 7. [Execução no PostgreSQL] ──────────► Executa via prismaClient.$queryRawUnsafe() e
-        │                                trata bigint do Postgres para JSON limpo
-        ▼
- 8. [Injeção no Contexto do Chat] ─────► Injeta os dados reais com diretiva contra placeholders
-        │
-        ▼
- Gemini gera resposta contextualizada final e entrega via SSE Stream ao Frontend
-```
-
-### Arquivos Principais do Pipeline:
-- [`ExtractKeywordsUseCase`](file:///d:/Projetos/Gideon/backend/src/modules/data-dictionary/application/use-cases/extract-keywords.use-case.ts): Utiliza o Gemini para quebrar perguntas complexas em tokens e termos de negócio (ex: `"cliente"`, `"11096"`, `"limite"`, `"saldo"`).
-- [`SearchMetadataUseCase`](file:///d:/Projetos/Gideon/backend/src/modules/data-dictionary/application/use-cases/search-metadata.use-case.ts): Realiza correspondência insensível a maiúsculas/minúsculas e pontuação nas tabelas e colunas cadastradas, calculando pontuação de relevância.
-- [`ExpandRelationshipsUseCase`](file:///d:/Projetos/Gideon/backend/src/modules/data-dictionary/application/use-cases/expand-relationships.use-case.ts): Percorre o grafo de dependências. Se a tabela de vendas `erp_vendas` foi selecionada e possui FK para `erp_clientes`, esta última é automaticamente anexada ao contexto para permitir o JOIN correto.
-- [`BuildSqlGenerationPromptUseCase`](file:///d:/Projetos/Gideon/backend/src/modules/data-dictionary/application/use-cases/build-sql-generation-prompt.use-case.ts): Monta o esquema DDL simplificado informando expressamente quais colunas são PKs e FKs.
-- [`ChatRagService`](file:///d:/Projetos/Gideon/backend/src/services/chat-rag.service.ts): Orquestrador do Text-to-SQL que solicita a query ao Gemini, inspeciona e valida segurança contra SQL Injection / mutações destrutivas e executa no banco de dados.
-
-
-
-## 4. Dicionário de Dados Dinâmico & Multi-tenant
-
-O banco de dados armazena metadados de qualquer tabela dinâmica criada pelos usuários através dos modelos `MetaTable` e `MetaColumn`.
-
-### Características:
-- **Isolamento Multitenant:** Suporte nativo a múltiplos clientes através do campo `tenantId` com índices dedicados.
-- **Normalização de Identificadores (PostgreSQL Case-Folding):** O PostgreSQL converte identificadores sem aspas para minúsculas. O `MetaColumnEntity` normaliza as colunas em minúsculas para garantir compatibilidade 100% com identificadores cotados (`"codcli"`, `"razaosocial"`).
-- **Identificação Obrigatória de Chave Primária (PK):** Impede a criação ou sincronização de tabelas sem a demarcação estrita da PK.
+### Fluxo de Execução do Chat
+1. **Entrada do Usuário:** Recebe a pergunta e recupera a memória pessoal do usuário (ex: como prefere ser chamado, formato de respostas favorito).
+2. **Extração Conceitual (`ExtractKeywordsUseCase`):** Quebra a pergunta em entidades, datas, códigos e regras de negócio.
+3. **Mapeamento Semântico (`SearchMetadataUseCase`):** Localiza no Dicionário de Dados as tabelas e colunas correspondentes.
+4. **Resolução de Chaves e Relacionamentos (`ExpandRelationshipsUseCase`):** Detecta chaves estrangeiras (FKs) e anexa tabelas associadas para permitir `JOINs` automáticos.
+5. **Geração do Prompt DDL (`BuildSqlGenerationPromptUseCase`):** Constrói o contexto restrito com nomes de colunas, tipos e regras de ouro de negócio (ex: `faturamento = Venda - Devolução`).
+6. **Text-to-SQL via Gemini:** Gera a consulta SQL compatível com PostgreSQL.
+7. **Validação Estrita Read-Only:** Bloqueia comandos destrutivos (DDL/DML), injeções de SQL, chamadas de sistema e tabelas internas confidenciais (`usuarios`, `chat_feedbacks`). Limita a query a `LIMIT 50`.
+8. **Execução no PostgreSQL:** Executa a query de forma parametrizada e formata os dados reais.
+9. **Revisor em Duas Camadas (`ResponseReviewerService`):**
+   - Agente crítico que inspeciona a consistência numérica e a adequação da Matriz Visual de Gráficos.
+   - Gera o bloco estruturado de visualização (Generative UI):
+     ````markdown
+     ```dashboard
+     {
+       "type": "bar",
+       "title": "Faturamento por Vendedor",
+       "data": [{ "name": "Carlos", "value": 142000 }]
+     }
+     ```
+     ````
+10. **Prompt de Ação para o Dashboard:** Quando a Gideon renderiza um gráfico, ela questiona automaticamente: *"Deseja salvar este gráfico no seu Dashboard?"*, disponibilizando botão de 1 clique ou aceitando confirmação conversacional ("Sim", "quero").
 
 ---
 
-## 5. Motor de Sincronização ERP, Filas & Tabelas Dinâmicas
+## 4. Multi-Conversas FIFO, Compactação & Memória Pessoal
 
-### DynamicTableManager (`backend/src/services/dynamic-table.manager.ts`)
-Responsável pelo ciclo de vida físico das tabelas dinâmicas no PostgreSQL, controle estrito de memória do V8 Heap e execução das estratégias de sincronização com o Sankhya ERP:
+### Fila FIFO de Conversas (Até 10 por Usuário)
+- Cada usuário pode manter até **10 conversas ativas** separadas.
+- Ao atingir o limite de 10 conversas, a criação de uma nova remove automaticamente a mais antiga não-fixada (**FIFO — First In, First Out**).
+- Conversas podem ser **renomeadas**, **fixadas no topo** (não são removidas pelo FIFO) e **excluídas**.
 
-- **Estratégias Estritas de Sincronização:**
-  1. `FULL` **(Sincronização Completa Paginada):**
-     - Trunca a tabela no PostgreSQL (`TRUNCATE TABLE`).
-     - Executa paginação universal por `OFFSET` (via `ROWNUM` no Oracle) ou por macro `{{LAST_CURSOR}}`.
-     - Insere os dados em massa em sub-lotes controlados de 500 registros, gerando e persistindo o `_row_hash` para cada linha.
-     - Libera explicitamente arrays e referências a cada lote para estabilidade do Garbage Collector (V8 Heap).
-  2. `HASH_COMPARATOR` **(Sincronização Incremental Inteligente por Hash):**
-     - Varre os dados do ERP em lotes configuráveis (`batchSize`).
-     - Calcula em memória o Hash MD5 determinístico (`_row_hash`) de cada linha recebida.
-     - Consulta no PostgreSQL apenas os hashes atuais das PKs daquele lote (`SELECT pk, _row_hash WHERE pk IN (...)`).
-     - Compara linha a linha: linhas com hash idêntico são **descartadas imediatamente da memória** (economia massiva de CPU, rede e I/O).
-     - Linhas novas ou modificadas sofrem `UPSERT` nativo via `INSERT ... ON CONFLICT ("primary_key") DO UPDATE SET ...`.
-     - Reconciliação inteligente: em varreduras totais, identifica e executa Hard Delete (`DELETE FROM ... WHERE pk IN (...)`) para registros ausentes no ERP.
-- **Hash MD5 Determinístico (`generateRowHash`):**
-  - Concatena chave e valor ordenados alfabeticamente (`campo1:valor1|campo2:valor2`).
-  - Isola metadados técnicos (`_id`, `_row_hash`, `_synced_at`, `created_at`), garantindo que alterações na ordem das colunas da query não gerem falsos positivos.
-- **Prevenção de Loops Infinitos & Paginação Híbrida:**
-  - Se a query SQL do usuário não possuir a macro `{{LAST_CURSOR}}`, o sistema pagina automaticamente via `OFFSET` e `ROWNUM` do Oracle.
-  - Guarda anti-estagnação (*stall detection*): se a macro `{{LAST_CURSOR}}` for utilizada e o cursor não avançar entre lotes consecutivos, o loop é interrompido com alerta.
-- **Arquitetura de Chaves e Isolamento DDL:**
-  - A chave surrogate técnica interna do PostgreSQL é nomeada como `"_id" BIGSERIAL PRIMARY KEY`.
-  - Caso a query do ERP utilize uma chave de negócio chamada `"id"` ou `"ID"` (ex: concatenações de strings como `CODPARC || '-' || CODVEND`), esta é criada como coluna de negócio do tipo `TEXT`, permitindo índices únicos e `ON CONFLICT` textuais.
-- **Colunas Técnicas Padronizadas:**
-  - `_row_hash TEXT`: Hash MD5 do conteúdo completo da linha.
-  - `_synced_at TIMESTAMPTZ DEFAULT NOW()`: Registro de data/hora da sincronização.
-  - `created_at TIMESTAMPTZ DEFAULT NOW()`: Data de inserção do registro local.
-  
-### SyncQueueManager (`backend/src/services/sync-queue.manager.ts`)
-Sistema de fila em memória com padrão Singleton que gerencia a execução de sincronizações:
-- **Controle Estrito de Concorrência:** Limita a execução concorrente de tabelas (`concurrency = 1` por padrão) para proteger a CPU, memória RAM e limites de conexões do PostgreSQL e gateway do Sankhya.
-- **Enfileiramento Inteligente:** Previne duplicação de jobs pendentes para a mesma tabela.
-- **Tratamento de Falhas:** Notifica eventos de início, sucesso e erro, atualizando o status da configuração com detalhes da execução.
+### Compactação Contínua Inteligente (Rolling Compaction)
+- Quando uma conversa ultrapassa o limite seguro de tokens/mensagens (16 mensagens ou 12.000 caracteres):
+  - As mensagens anteriores são sintetizadas em um resumo executivo de contexto (`summary`), mantendo tópicos, decisões e dados já abordados.
+  - As **últimas 6 mensagens permanecem intactas**, preservando a fluidez conversacional imediata.
 
-### ErpSyncScheduler (`backend/src/services/erp-sync.scheduler.ts`)
-Serviço de agendamento autônomo baseado em intervalos que roda em segundo plano:
-- **Ciclo de Verificação:** Executa a cada 30 segundos, verificando se há integrações ativas elegíveis para execução e as envia para o `SyncQueueManager`.
-- **Frequências Suportadas:**
-  1. `MINUTES`: Intervalo em minutos (ex: a cada 15 min).
-  2. `HOURS`: Intervalo em horas (ex: a cada 1 hora).
-  3. `DAILY`: Execução diária em horário fixo (ex: às 08:00).
-  4. `MONTHLY`: Execução mensal em dia e horário específicos (ex: todo dia 01 às 08:00).
-  5. `MANUAL`: Apenas sincronização manual disparada pelo painel administrativo.
-- **Rastreabilidade:** Grava `lastSyncAt`, `nextSyncAt`, `lastSyncStatus` (`SUCCESS` ou `ERROR`) e `lastSyncMessage`.
+### Memória Pessoal do Usuário (`user_memories`)
+- A Gideon memoriza particularidades de cada usuário para personalizar o atendimento:
+  - Como o usuário gosta de ser tratado (ex: *"Me chame de Sr. Matheus"*, apelidos, pronomes).
+  - Preferências de comunicação (respostas diretas, bullet points, foco comercial).
+  - Áreas de foco ou filiais prioritárias.
+- **Extração Implícita e Gestão Explícita:** A IA detecta preferências automaticamente durante a conversa e também disponibiliza um modal para visualização, adição manual e exclusão de memórias.
 
 ---
 
-## 6. Módulo de Segurança, Autenticação & RBAC
+## 5. Seu Dashboard — Indicadores & Gráficos Personalizados
 
-O sistema de autenticação legado (validação em tempo de login na tabela `TGFVEN` via Sankhya com envio de OTP) foi descontinuado. A autenticação agora é **100% interna e baseada na tabela de usuários do PostgreSQL**.
+A rota `/dashboard` oferece um painel analítico individual para cada usuário (Gerentes e Administradores):
 
-### Regras de Negócio e Segurança:
-- **Criptografia:** Senhas armazenadas com hash seguro via `bcryptjs` (salt rounds = 10). A `senha_hash` **nunca** é devolvida pela API.
-- **Política de Senha Obrigatória (Regex):**
-  ```regex
-  ^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,}$
-  ```
-  - Mínimo de 8 caracteres.
-  - Pelo menos 1 letra maiúscula (`A-Z`).
-  - Pelo menos 1 letra minúscula (`a-z`).
-  - Pelo menos 1 número (`0-9`).
-  - Pelo menos 1 caractere especial (`!@#$%^&*()_+-=...`).
-- **Validação de Confirmação:** No cadastro ou alteração, os campos `senha` e `confirmacao_senha` devem ser idênticos.
-- **Tokens JWT:** Assinados com secret configurável, com validade de 7 dias, transportando perfil (`ADMIN` ou `GERENTE`), dados do usuário e identificadores do ERP.
-- **Auto-proteção:** Administradores não podem excluir a própria conta logada.
+- **Grid Responsivo com Reordenação:** Widgets de indicadores organizados em colunas com persistência automática de tamanho (`colSpan`), altura (`rowSpan`) e ordenação (`order`).
+- **Do Chat Direto para o Dashboard:** Ao confirmar a pergunta da Gideon no chat, o gráfico é adicionado ao Dashboard com o **mesmo layout**, título, dados e query SQL subjacente.
+- **Criação de Widgets por Linguagem Natural:** O usuário pode digitar um prompt (ex: *"Crie um gráfico de pizza dos 4 clientes com mais títulos em aberto"*) para gerar novos widgets diretamente na tela do Dashboard.
+- **Refresh em Tempo Real:** Cada widget pode ser atualizado com 1 clique, executando a consulta SQL diretamente contra o banco de dados atualizado.
+- **Isolamento Multi-tenant (RBAC):** Cada usuário visualiza e gerencia exclusivamente seus próprios dashboards e widgets.
 
 ---
 
-## 7. Referência Completa de Endpoints da API
+## 6. Sistema de Avaliação de Respostas & Qualidade da IA
 
-Todas as rotas da API estão prefixadas por `/api`.
+Para garantir a melhoria contínua sem automações cegas que possam degradar o modelo, o Gideon conta com um sistema de avaliação e curadoria assistida:
+
+### Avaliação no Chat (`👍 Útil` / `👎 Precisa melhorar`)
+- Presente abaixo de cada resposta concluída da Gideon.
+- Gravação instantânea em 1 clique no banco de dados (`chat_feedbacks`).
+- Opção de seleção de tags de diagnóstico:
+  - **Negativas:** `Informação incorreta`, `Faltou informação`, `Valor / Cálculo incorreto`, `Gráfico inadequado`, `Não entendeu a pergunta`, `Outro motivo`.
+  - **Positivas:** `Números exatos`, `Excelente explicação`, `Gráfico muito útil`, `Rápida e direta`.
+- Campo opcional de observação livre.
+
+### Central de Curadoria e Qualidade (`/admin/feedbacks`)
+Painel exclusivo para Administradores com analytics executivo:
+- **KPIs:** `% de Feedbacks Positivos vs Negativos`, total de avaliações, pendentes e resolvidos.
+- **Gráfico de Tendência Temporal:** Evolução diária das avaliações positivas e negativas para diagnosticar se a IA está melhorando ou regredindo ao longo do tempo.
+- **Ranking de Usuários:** Usuários que mais avaliam e taxa de aprovação individual.
+- **Distribuição de Motivos/Tags:** Gráfico das causas mais recorrentes de insatisfação.
+- **Inspeção Completa & Resolução Manual:** Visualização da pergunta, resposta, SQL gerado e histórico integral da conversa com botão **"Marcar como Resolvido"** / **"Reabrir"** após o ajuste das regras de negócio.
+
+---
+
+## 7. Dicionário de Dados Dinâmico & Sincronizador ERP
+
+### Sincronização com o Sankhya ERP
+O serviço `DynamicTableManager` gerencia o espelhamento das tabelas do Sankhya para tabelas locais no PostgreSQL prefixadas com `erp_*`:
+
+- **Estratégias de Sync:**
+  1. `FULL` **(Sincronização Completa):** Trunca a tabela local e faz carga total paginada via `ROWNUM` ou cursor.
+  2. `HASH_COMPARATOR` **(Incremental Inteligente):** Calcula o hash MD5 determinístico (`_row_hash`) de cada registro. Registros inalterados são descartados da memória; registros novos ou modificados sofrem `UPSERT` atômico via `ON CONFLICT (primary_key) DO UPDATE`.
+- **Fila com Limite de Concorrência (`SyncQueueManager`):** Enfileira sincronizações garantindo execução segura sem sobrecarregar o gateway do ERP.
+- **Agendador Autônomo (`ErpSyncScheduler`):** Executa rotinas automáticas com frequências configuráveis: minutos, horas, diário ou mensal.
+
+---
+
+## 8. Módulo de Segurança, Autenticação & RBAC
+
+- **Autenticação Interna Segura:** Senhas criptografadas via `bcryptjs` (salt rounds = 10) com validação por expressão regular (mínimo 8 caracteres, maiúsculas, minúsculas, números e caracteres especiais).
+- **Sessões via JWT:** Tokens assinados com validade de 7 dias, transportando ID do usuário, nome, e-mail e perfil (`ADMIN` ou `GERENTE`).
+- **Guarda de Rotas (Frontend & Backend):** Middleware `requireAuth` e `requireAdmin` garantem que rotas administrativas não sejam executadas por gerentes.
+- **Proteção Text-to-SQL:** Blocklist nativa que impede o RAG de ler ou expor tabelas confidenciais (`usuarios`, `chat_feedbacks`, `erp_configurations`).
+
+---
+
+## 9. Referência Completa de Endpoints da API
+
+Todas as rotas são prefixadas por `/api`.
 
 ### 🔑 Autenticação (`/api/auth`)
-
 | Método | Endpoint | Acesso | Descrição |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/auth/login` | Público | Autenticação com `email` e `password`. Retorna token JWT e perfil do usuário. |
-| `POST` | `/api/auth/login/admin` | Público | Alias do endpoint de login. |
+| `POST` | `/api/auth/login` | Público | Autenticação com e-mail e senha. Retorna token JWT e perfil. |
 | `GET` | `/api/auth/me` | Autenticado | Retorna os dados do usuário autenticado no token Bearer. |
 
----
-
 ### 👥 Gestão de Usuários (`/api/users`)
-*Todas as rotas abaixo exigem privilégio de `ADMIN` (Middleware `requireAdmin`).*
-
-| Método | Endpoint | Descrição |
-| :--- | :--- | :--- |
-| `GET` | `/api/users` | Lista todos os usuários cadastrados (sem expor `senha_hash`), ordenados por data de criação. |
-| `GET` | `/api/users/:id` | Retorna os detalhes de um usuário específico. |
-| `POST` | `/api/users` | Cria um novo usuário (`nome`, `email`, `usuario_erp`, `cod_gerente_erp`, `tipo_acesso`, `senha`, `confirmacao_senha`). |
-| `PUT` | `/api/users/:id` | Atualiza dados cadastrais e/ou redefine a senha (senha opcional na edição). |
-| `DELETE` | `/api/users/:id` | Remove um usuário (bloqueia auto-exclusão do próprio administrador). |
-
----
-
-### 🗄️ Integrações do ERP Sankhya (`/api/erp`)
-
 | Método | Endpoint | Acesso | Descrição |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/erp/query` | Autenticado | Executa consulta somente-leitura de teste no gateway `DbExplorerSP` do Sankhya. |
-| `GET` | `/api/erp/configurations` | Admin | Lista todas as integrações configuradas com status de agendamento. |
-| `POST` | `/api/erp/configurations` | Admin | Cria nova integração, gera a tabela dinâmica física e registra no Dicionário de Dados. |
-| `GET` | `/api/erp/configurations/:id` | Admin | Retorna dados de uma configuração específica. |
-| `PUT` | `/api/erp/configurations/:id` | Admin | Atualiza a query, colunas esperadas, PK, agendamento e sincroniza o DDL. |
-| `DELETE` | `/api/erp/configurations/:id` | Admin | Exclui a integração e sua tabela física no banco. |
-| `POST` | `/api/erp/configurations/:id/sync` | Admin | Dispara manualmente a sincronização imediata com o Sankhya. |
+| `GET` | `/api/users` | Admin | Lista todos os usuários cadastrados. |
+| `POST` | `/api/users` | Admin | Cadastra novo usuário com senha e confirmação de senha. |
+| `PUT` | `/api/users/:id` | Admin | Atualiza dados ou redefine a senha do usuário. |
+| `DELETE` | `/api/users/:id` | Admin | Exclui usuário (com bloqueio de auto-exclusão do admin). |
 
----
-
-### 🤖 Configurações da IA (`/api/ai`)
-
+### 💬 Chat, Multi-Conversas & Memórias (`/api/chat`)
 | Método | Endpoint | Acesso | Descrição |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/ai/configurations` | Admin | Retorna o `systemPrompt`, `temperature`, `topP` e `memorySize`. |
-| `PUT` | `/api/ai/configurations` | Admin | Atualiza os parâmetros globais da IA persistidos no PostgreSQL. |
+| `POST` | `/api/chat` | Autenticado | Processa a pergunta, executa RAG Text-to-SQL e transmite SSE. |
+| `GET` | `/api/chat/conversations` | Autenticado | Lista as conversas ativas do usuário (máx. 10). |
+| `POST` | `/api/chat/conversations` | Autenticado | Cria uma nova conversa (com remoção FIFO da mais antiga se necessário). |
+| `GET` | `/api/chat/conversations/:id` | Autenticado | Retorna os detalhes e o histórico de mensagens da conversa. |
+| `PATCH` | `/api/chat/conversations/:id` | Autenticado | Renomeia o título ou fixa/desafixa a conversa. |
+| `DELETE` | `/api/chat/conversations/:id` | Autenticado | Exclui uma conversa e suas mensagens. |
+| `GET` | `/api/chat/memories` | Autenticado | Lista as memórias e preferências salvas do usuário. |
+| `POST` | `/api/chat/memories` | Autenticado | Cadastra uma nova memória pessoal manualmente. |
+| `DELETE` | `/api/chat/memories/:id` | Autenticado | Remove uma memória do usuário. |
+| `POST` | `/api/chat/feedback` | Autenticado | Registra avaliação de uma resposta (👍/👎, tags, comentário e snapshot). |
 
----
-
-### 💬 Chat com RAG e Streaming SSE (`/api/chat`)
-
+### 📊 "Seu Dashboard" (`/api/dashboard`)
 | Método | Endpoint | Acesso | Descrição |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/chat` | Autenticado | Recebe o histórico da conversa, executa o RAG Text-to-SQL, consulta dados reais no Postgres e transmite a resposta via Server-Sent Events (`text/event-stream`). |
+| `GET` | `/api/dashboard/me` | Autenticado | Obtém ou cria o dashboard do usuário autenticado com seus widgets. |
+| `POST` | `/api/dashboard/widgets` | Autenticado | Salva diretamente um widget com layout, tipo, dados e query SQL. |
+| `POST` | `/api/dashboard/widgets/generate` | Autenticado | Gera e adiciona um novo widget a partir de um prompt em linguagem natural. |
+| `PUT` | `/api/dashboard/layout` | Autenticado | Atualiza em lote a ordem e dimensões (`colSpan`, `rowSpan`) dos widgets. |
+| `POST` | `/api/dashboard/widgets/:id/refresh` | Autenticado | Reexecuta a query SQL do widget e atualiza seu cache de dados. |
+| `DELETE` | `/api/dashboard/widgets/:id` | Autenticado | Exclui um widget do dashboard. |
+
+### 🏆 Curadoria de Feedbacks & Qualidade IA (`/api/admin/feedbacks`)
+| Método | Endpoint | Acesso | Descrição |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/admin/feedbacks` | Admin | Retorna a lista filtrada de feedbacks e o dashboard consolidado de métricas. |
+| `PATCH` | `/api/admin/feedbacks/:id/status` | Admin | Altera o status da avaliação entre `PENDING` e `RESOLVED`. |
+
+### 🗄️ Integrações ERP & Configurações da IA
+| Método | Endpoint | Acesso | Descrição |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/erp/configurations` | Admin | Lista todas as integrações com o Sankhya configuradas. |
+| `POST` | `/api/erp/configurations` | Admin | Cria nova integração, cria tabela física e registra no dicionário. |
+| `PUT` | `/api/erp/configurations/:id` | Admin | Edita query, colunas, chave primária e parâmetros de agendamento. |
+| `DELETE` | `/api/erp/configurations/:id` | Admin | Remove a integração e a tabela física correspondente. |
+| `POST` | `/api/erp/configurations/:id/sync` | Admin | Dispara sincronização imediata com o Sankhya. |
+| `GET` | `/api/ai/configurations` | Admin | Retorna os parâmetros globais do modelo LLM. |
+| `PUT` | `/api/ai/configurations` | Admin | Atualiza system prompt, temperatura, topP e memória. |
 
 ---
 
-## 8. Modelagem de Dados (Prisma & PostgreSQL)
+## 10. Modelagem de Dados (Prisma & PostgreSQL)
 
-O arquivo [`schema.prisma`](file:///d:/Projetos/Gideon/backend/prisma/schema.prisma) define as entidades estruturais do Gideon:
+O modelo relacional em [`schema.prisma`](file:///mnt/Dados/Projetos/Gideon/backend/prisma/schema.prisma) contempla:
 
-```prisma
-// Usuários internos do Gideon
-model Usuario {
-  id              String   @id @default(uuid())
-  nome            String
-  email           String   @unique
-  senha_hash      String   @map("senha_hash")
-  usuario_erp     String   @map("usuario_erp")
-  cod_gerente_erp String   @map("cod_gerente_erp")
-  tipo_acesso     String   @default("GERENTE") @map("tipo_acesso")
-  criado_em       DateTime @default(now()) @map("criado_em")
-  atualizado_em   DateTime @updatedAt @map("atualizado_em")
-
-  @@map("usuarios")
-}
-
-// Configurações globais de comportamento do modelo LLM
-model AiConfiguration {
-  id           String   @id @default("ai-config")
-  systemPrompt String   @db.Text
-  temperature  Float    @default(0.7)
-  topP         Float    @default(0.9)
-  memorySize   Int      @default(10)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@map("ai_configurations")
-}
-
-// Configurações de integração SQL com o Sankhya, Estratégia de Sync e Agendamento
-model ErpConfiguration {
-  id              String    @id @default(uuid())
-  context         String
-  description     String    @db.Text
-  query           String    @db.Text
-  expectedFields  String[]
-  tableName       String
-  primaryKey      String?
-
-  // Estratégia de sincronização e paginação (FULL ou HASH_COMPARATOR)
-  syncStrategy    String    @default("FULL") // FULL ou HASH_COMPARATOR
-  lastSyncCursor  String?
-  batchSize       Int       @default(1000)
-  activeColumn    String?
-  activeValue     String?
-
-  // Agendamento da atualização automática
-  syncFrequency   String    @default("HOURS") // MINUTES, HOURS, DAILY, MONTHLY, MANUAL
-  syncInterval    Int?      @default(1)
-  syncTime        String?   @default("08:00")
-  syncDayOfMonth  Int?      @default(1)
-  syncActive      Boolean   @default(true)
-  lastSyncAt      DateTime?
-  nextSyncAt      DateTime?
-  lastSyncStatus  String?   // SUCCESS, ERROR, RUNNING
-  lastSyncMessage String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-
-  @@map("erp_configurations")
-}
-
-// Dicionário de Dados: Tabelas cadastradas para RAG
-model MetaTable {
-  id          String       @id @default(uuid())
-  tenantId    String
-  tableName   String
-  description String       @db.Text
-  columns     MetaColumn[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-
-  @@unique([tenantId, tableName])
-  @@index([tenantId])
-  @@map("meta_tables")
-}
-
-// Dicionário de Dados: Colunas e Relacionamentos
-model MetaColumn {
-  id                 String    @id @default(uuid())
-  metaTableId        String
-  columnName         String
-  dataType           String    @default("TEXT")
-  description        String    @db.Text
-  isPrimaryKey       Boolean   @default(false)
-  foreignKeyToTable  String?
-  foreignKeyToColumn String?
-  metaTable          MetaTable @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-
-  @@unique([metaTableId, columnName])
-  @@index([metaTableId])
-  @@map("meta_columns")
-}
-```
+- `Usuario`: Perfis de acesso (`ADMIN` ou `GERENTE`), credenciais e vínculos.
+- `AiConfiguration`: System prompt corporativo e hiperparâmetros do modelo.
+- `ErpConfiguration`: Queries de extração do Sankhya, estratégias de sync e regras de agendamento.
+- `MetaTable` & `MetaColumn`: Dicionário de dados semântico para o RAG Text-to-SQL.
+- `ChatConversation` & `ChatMessage`: Histórico multi-conversa, resumo compactado e mensagens.
+- `UserMemory`: Memórias e preferências de longo prazo de cada usuário.
+- `UserDashboard` & `DashboardWidget`: Painéis analíticos personalizados, posições de grid e cache de consultas.
+- `ChatFeedback`: Registro detalhado de avaliações de respostas, tags, comentários, SQL e status de revisão manual.
 
 ---
 
-## 9. Arquitetura Frontend (SPA)
+## 11. Arquitetura Frontend (SPA) & Telas do Sistema
 
-Construído com **React 19, TypeScript e Vite**, priorizando performance, responsividade e separação clara de papéis:
+Desenvolvido em **React 19, TypeScript, Vite e Tailwind CSS**:
 
-- [`AuthContext.tsx`](file:///d:/Projetos/Gideon/frontend/src/context/AuthContext.tsx): Gerenciador global de sessão, persistência via `localStorage`, renovação e cabeçalhos de autorização Bearer.
-- [`ProtectedRoute.tsx`](file:///d:/Projetos/Gideon/frontend/src/components/ProtectedRoute.tsx): Guarda de rotas que valida se o usuário está logado e se possui o papel exigido (`requiredRole="ADMIN"`). Se um Gerente tentar acessar `/admin/*`, é redirecionado instantaneamente para `/`.
-- [`Login.tsx`](file:///d:/Projetos/Gideon/frontend/src/pages/Login.tsx): Tela de autenticação moderna e direta com validação de credenciais.
-- [`Chat.tsx`](file:///d:/Projetos/Gideon/frontend/src/pages/Chat.tsx): Interface conversacional otimizada com streaming de texto em tempo real (Server-Sent Events) e renderização rica em Markdown.
-- [`AdminERP.tsx`](file:///d:/Projetos/Gideon/frontend/src/pages/AdminERP.tsx): Painel completo de integração com Sankhya, editor SQL com atalhos de teclado, seleção de Chave Primária (PK), configuração de agendamento e sincronização manual instantânea.
-- [`AdminAI.tsx`](file:///d:/Projetos/Gideon/frontend/src/pages/AdminAI.tsx): Ajuste em tempo real do Prompt do Sistema, Temperatura, TopP e limite de histórico.
-- [`AdminUsers.tsx`](file:///d:/Projetos/Gideon/frontend/src/pages/AdminUsers.tsx): Módulo de Gestão de Usuários com Tabela / Data Grid, barra de busca instantânea, checklist visual de validação de senha e modais de criação, edição, visualização e exclusão.
-
-### 9.1. Generative UI — Dashboards & Gráficos Interativos (Recharts)
-
-O Gideon adota uma arquitetura de **Server-Driven Generative UI**, permitindo que a IA forneça respostas visuais e analíticas ricas sem vulnerabilidades de segurança (XSS):
-
-- **Protocolo de Blocos Estruturados:** A IA formata agregações e relatórios em blocos JSON sob a tag de linguagem `dashboard`:
-  ````markdown
-  ```dashboard
-  {
-    "type": "bar", // Suporta: "bar", "line", "pie" ou "table"
-    "title": "Comparativo de Vendas por Categoria",
-    "data": [
-      { "name": "Categoria A", "value": 1500 },
-      { "name": "Categoria B", "value": 3200 }
-    ]
-  }
-  ```
-  ````
-- **Interceptação Dinâmica no Streaming:** O componente [`Chat.tsx`](file:///d:/Projetos/Gideon/frontend/src/pages/Chat.tsx) intercepta blocos de código com linguagem `dashboard` no `ReactMarkdown` e delega a renderização para [`DynamicDashboard.tsx`](file:///d:/Projetos/Gideon/frontend/src/components/chat/DynamicDashboard.tsx).
-- **Tolerância a Streaming Incompleto:** Como as respostas chegam fragmentadas via SSE (Server-Sent Events), o componente trata `JSON.parse` dentro de bloco protegido. Enquanto o JSON está incompleto durante a digitação, exibe um esqueleto sutil com `animate-pulse`, evitando quebras de renderização ou ruídos no console.
-- **Visualizações Nativas:** Renderiza componentes interativos de alta fidelidade com `Recharts` (`BarChart`, `LineChart`, `PieChart` com tooltips e paletas corporativas) e tabelas responsivas estilizadas com Tailwind CSS.
-- **Segurança de UI:** O uso de `dangerouslySetInnerHTML` é expressamente proibido no ecossistema da aplicação.
+- **Chat com Assistente IA (`/`):**
+  - Barra lateral retrátil estilo ChatGPT com histórico das últimas 10 conversas, botão de nova conversa e fixação.
+  - Streaming em tempo real via Server-Sent Events (SSE) com indicador de progresso das etapas de raciocínio.
+  - Generative UI: renderização interativa de gráficos com `Recharts` e opção imediata de salvar no dashboard.
+  - Avaliação de respostas (👍 / 👎) com seleção dinâmica de tags e modal de gerenciamento de memórias do usuário.
+- **Seu Dashboard (`/dashboard`):**
+  - Grid responsivo de indicadores com suporte a redimensionamento e reordenação.
+  - Botão de refresh individual por widget e modal de criação de indicador por prompt.
+- **Integrações ERP (`/admin/erp`):**
+  - Construtor visual de integrações, editor SQL para Sankhya, seleção de chave primária e agendador.
+- **Configurações de IA (`/admin/ai`):**
+  - Ajuste de system prompt, regras de negócio e parâmetros de inferência.
+- **Feedbacks & Qualidade IA (`/admin/feedbacks`):**
+  - Dashboard analítico executivo (taxa de aprovação, tendência temporal, ranking de usuários e motivos).
+  - Tabela de revisão com modal de conversa completa e resolução manual.
+- **Gestão de Usuários (`/admin/users`):**
+  - Controle de contas, regras de senha e definição de papéis.
 
 ---
 
-## 10. Variáveis de Ambiente e Configuração
+## 12. Variáveis de Ambiente e Configuração
 
-Crie um arquivo `.env` na pasta `backend/` com as seguintes chaves:
+Crie um arquivo `.env` no diretório `backend/`:
 
 ```env
-# Servidor
+# Servidor Backend
 PORT=3080
 CORS_ORIGIN=http://localhost:3090
 
@@ -439,19 +333,19 @@ JWT_SECRET=sua_chave_secreta_jwt_longa_e_segura
 ADMIN_EMAIL=admin@gideon.local
 ADMIN_PASSWORD=Admin@123
 
-# Banco de Dados PostgreSQL (Supabase)
-DATABASE_URL="postgresql://usuario:senha@aws-0-sa-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
-DIRECT_URL="postgresql://usuario:senha@aws-0-sa-east-1.pooler.supabase.com:5432/postgres"
+# Banco de Dados PostgreSQL
+DATABASE_URL="postgresql://usuario:senha@localhost:5432/gideon_db"
+DIRECT_URL="postgresql://usuario:senha@localhost:5432/gideon_db"
 ```
 
 ---
 
-## 11. Guia de Instalação e Execução Local
+## 13. Guia de Instalação e Execução Local
 
 ### Pré-requisitos
-- Node.js versão 20+ instalada
-- PostgreSQL ativo (ou projeto no Supabase)
-- Chave de API do Google Gemini ativa
+- Node.js 20+
+- PostgreSQL 15+ ativo (local ou container Docker)
+- Chave de API do Google Gemini
 
 ### 1. Clonar e Instalar Dependências
 
@@ -474,24 +368,33 @@ cd backend
 npx prisma generate
 ```
 
-### 3. Iniciar os Servidores em Modo de Desenvolvimento
+> **Atenção:** As tabelas operacionais do ERP (`erp_*`) e de controle interno são gerenciadas de forma idempotente e dinâmica. Não execute `prisma db push --accept-data-loss`.
 
-**Terminal 1 — Backend (porta 3001):**
+### 3. Executar a Suíte de Testes Automatizados
+
+```bash
+cd backend
+npx tsc --noEmit && npx tsx --test src/__tests__/*.test.ts
+```
+
+### 4. Iniciar a Aplicação
+
+**Terminal 1 — Backend (Porta 3080):**
 ```bash
 cd backend
 npm run dev
 ```
 
-**Terminal 2 — Frontend (porta 5173):**
+**Terminal 2 — Frontend (Porta 3090):**
 ```bash
 cd frontend
 npm run dev
 ```
 
-### 4. Acesso Inicial
-Abra o navegador em `http://localhost:5173/login`:
-- **Usuário Padrão:** `admin@gideon.local`
-- **Senha Padrão:** `Admin@123`
+### 5. Acesso Inicial
+Acesse no navegador: `http://localhost:3090`
+- **Usuário Inicial:** `admin@gideon.local`
+- **Senha Inicial:** `Admin@123`
 
 ---
 
