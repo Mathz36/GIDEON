@@ -80,10 +80,79 @@ export class ChatRagService {
 	}
 
 	/**
+	 * Reescreve a pergunta do usuário incorporando o contexto das mensagens anteriores (Query Rewriter)
+	 * para resolver referências anafóricas ("ele", "desse cliente", "no mês anterior", "em pizza").
+	 */
+	async rewriteQueryWithHistory(
+		userQuestion: string,
+		history?: Array<{ role: string; parts: Array<{ text: string }> }>,
+	): Promise<string> {
+		const cleanQuestion = userQuestion?.trim() ?? '';
+		if (!cleanQuestion) {
+			return '';
+		}
+
+		if (!Array.isArray(history) || history.length <= 1) {
+			return cleanQuestion;
+		}
+
+		// Seleciona até as 6 últimas mensagens anteriores à pergunta atual
+		const priorMessages = history.slice(0, -1).slice(-6);
+		if (priorMessages.length === 0) {
+			return cleanQuestion;
+		}
+
+		const formattedHistory = priorMessages
+			.map((m) => {
+				const speaker = m.role === 'user' ? 'Usuário' : 'Gideon';
+				const text = (m.parts ?? [])
+					.map((p) => p.text)
+					.join(' ')
+					.replace(/```dashboard[\s\S]*?```/g, '[Gráfico Exibido]')
+					.slice(0, 500);
+				return `${speaker}: ${text}`;
+			})
+			.join('\n');
+
+		const rewriterSystemInstruction =
+			'Você é um especialista em desambiguação de consultas de banco de dados (Query Rewriter). Sua tarefa é reescrever a última pergunta do usuário tornando-a 100% autocontida, explícita e clara para um gerador Text-to-SQL, incorporando nomes de clientes, códigos, produtos, datas ou filtros citados no histórico recente da conversa. Se a pergunta já for completa e independente, retorne-a exatamente como está. Retorne APENAS a pergunta reescrita em texto puro, sem aspas e sem explicações.';
+
+		const rewriterPrompt = `Histórico recente da conversa:\n${formattedHistory}\n\nÚltima pergunta do usuário: "${cleanQuestion}"\n\nPergunta reescrita autocontida:`;
+
+		try {
+			const rawRewritten =
+				typeof this.gemini.generateText === 'function'
+					? await this.gemini.generateText(
+							[{ role: 'user', parts: [{ text: rewriterPrompt }] }],
+							rewriterSystemInstruction,
+							{ temperature: 0.0, topP: 0.8 },
+						)
+					: typeof this.gemini.generateSqlQuery === 'function'
+						? await this.gemini.generateSqlQuery(rewriterPrompt, rewriterSystemInstruction)
+						: cleanQuestion;
+
+			const cleaned = String(rawRewritten ?? '')
+				.replace(/^["'`]+|["'`]+$/g, '')
+				.trim();
+
+			if (cleaned && cleaned.length >= 3 && cleaned.length <= 600 && !cleaned.includes('SELECT ')) {
+				return cleaned;
+			}
+		} catch (err) {
+			console.warn('[ChatRagService] Falha no Query Rewriter, mantendo pergunta original:', err);
+		}
+
+		return cleanQuestion;
+	}
+
+	/**
 	 * Executa o pipeline RAG completo retornando metadados estruturados de Grounding Determinístico,
 	 * flag explícita (`noDataFound`), `fallbackMessage` e linhas sanitizadas segundo a LGPD.
 	 */
-	async executeRagPipeline(userQuestion: string): Promise<RagPipelineResult> {
+	async executeRagPipeline(
+		userQuestion: string,
+		history?: Array<{ role: string; parts: Array<{ text: string }> }>,
+	): Promise<RagPipelineResult> {
 		if (!userQuestion || !userQuestion.trim()) {
 			return {
 				noDataFound: true,
@@ -97,9 +166,14 @@ export class ChatRagService {
 		}
 
 		try {
+			const effectiveQuestion =
+				Array.isArray(history) && history.length > 1
+					? await this.rewriteQueryWithHistory(userQuestion, history)
+					: userQuestion.trim();
+
 			const pipelineResult = await ragSqlPipeline.execute({
 				tenantId: 'default',
-				question: userQuestion,
+				question: effectiveQuestion,
 				maxInitialTables: 4,
 				customInstructions: `DIRETRIZES CRÍTICAS DE CONVERSÃO E TIPAGEM DE DADOS:
 1. COLUNAS DE DATA (ex: "data_emissao" e qualquer coluna descrita como data/hora):
@@ -179,8 +253,40 @@ export class ChatRagService {
 
 			console.info(`[ChatRagService] Executando query segura Read-Only no PostgreSQL:\n${sql}`);
 
-			// 5. Executa a query em transação Read-Only explícita com statement_timeout = '5000ms'
-			const rawRows = await this.executeSafeReadOnlyQuery(sql);
+			// 5. Executa a query em transação Read-Only explícita com statement_timeout = '5000ms' e Self-Healing SQL Retry
+			let rawRows: Record<string, unknown>[];
+			try {
+				rawRows = await this.executeSafeReadOnlyQuery(sql);
+			} catch (dbExecErr) {
+				const errMsg = dbExecErr instanceof Error ? dbExecErr.message : String(dbExecErr);
+				console.warn(`[ChatRagService] Falha na execução SQL inicial (${errMsg}). Iniciando Self-Healing SQL Retry...`);
+
+				const repairPrompt = `${sqlPrompt}\n\nATENÇÃO: A query SQL gerada anteriormente falhou no PostgreSQL.\nQuery que falhou:\n\`\`\`sql\n${sql}\n\`\`\`\nErro retornado pelo PostgreSQL:\n${errMsg}\n\nCorrija a query SQL usando estritamente as colunas reais do esquema acima e retorne APENAS o bloco \`\`\`sql ... \`\`\`.`;
+
+				const repairedRaw =
+					typeof this.gemini.generateSqlQuery === 'function'
+						? await this.gemini.generateSqlQuery(repairPrompt, sqlSystemInstruction)
+						: await this.gemini.generateText(
+								[{ role: 'user', parts: [{ text: repairPrompt }] }],
+								sqlSystemInstruction,
+								{ temperature: 0.0, topP: 0.8 },
+							);
+
+				const repairedMatch = repairedRaw.match(/```(?:sql)?\s*([\s\S]*?)\s*```/i);
+				let repairedSql = (repairedMatch ? repairedMatch[1] : repairedRaw).trim().replace(/;\s*$/, '');
+
+				if (!this.isReadOnlyQuery(repairedSql, allowedTables)) {
+					throw dbExecErr;
+				}
+				if (!/\bLIMIT\s+\d+/i.test(repairedSql)) {
+					repairedSql = `${repairedSql} LIMIT 50`;
+				}
+
+				console.info(`[ChatRagService] Executando query corrigida (Self-Healing):\n${repairedSql}`);
+				sql = repairedSql;
+				rawRows = await this.executeSafeReadOnlyQuery(sql);
+			}
+
 			const normalizedRows = Array.isArray(rawRows) ? rawRows : [];
 
 			// Caso c) A execução da query retornou 0 linhas (rows.length === 0)
@@ -238,33 +344,33 @@ Insira este JSON no meio da sua resposta, usando EXATAMENTE o seguinte bloco Mar
 { ... }
 \`\`\`
 
+ATENÇÃO CRÍTICA: Os modelos abaixo mostram APENAS o formato estrutural do JSON. NUNCA copie rótulos ilustrativos; utilize exclusivamente os valores presentes no JSON real acima.
+
 MATRIZ HEURÍSTICA DE ESCOLHA DE VISUALIZAÇÃO DE DADOS:
 Escolha rigorosamente o valor do campo "type" conforme a natureza da informação:
 
 1. "line" ou "area" — SÉRIES TEMPORAIS E TENDÊNCIAS (OBRIGATÓRIO):
    - Indicação: Obrigatório para evolução cronológica, tendências, faturamento mês a mês, vendas diárias e histórico contínuo ao longo do tempo.
    - Use "line" para curvas contínuas de tendência e "area" para volumes e grandezas acumuladas.
-   - Exemplo "line":
+   - Exemplo estrutural "line":
 \`\`\`dashboard
 {
   "type": "line",
-  "title": "Evolução Mensal do Faturamento (2024)",
+  "title": "<TÍTULO_BASEADO_NOS_DADOS_REAIS>",
   "data": [
-    {"name": "Jan/24", "value": 145000.00},
-    {"name": "Fev/24", "value": 162300.50},
-    {"name": "Mar/24", "value": 178900.00}
+    {"name": "<PERIODO_REAL_1>", "value": 0.00},
+    {"name": "<PERIODO_REAL_2>", "value": 0.00}
   ]
 }
 \`\`\`
-   - Exemplo "area":
+   - Exemplo estrutural "area":
 \`\`\`dashboard
 {
   "type": "area",
-  "title": "Volume Cumulativo de Vendas",
+  "title": "<TÍTULO_BASEADO_NOS_DADOS_REAIS>",
   "data": [
-    {"name": "Semana 1", "value": 32000.00},
-    {"name": "Semana 2", "value": 68000.00},
-    {"name": "Semana 3", "value": 115000.00}
+    {"name": "<PERIODO_REAL_1>", "value": 0.00},
+    {"name": "<PERIODO_REAL_2>", "value": 0.00}
   ]
 }
 \`\`\`
@@ -272,32 +378,28 @@ Escolha rigorosamente o valor do campo "type" conforme a natureza da informaçã
 2. "horizontal-bar" — RANKINGS E TOP N (OBRIGATÓRIO):
    - Indicação: Obrigatório para rankings e Top N (ex: Top 5/10 maiores clientes, produtos mais vendidos, maiores devedores, ranking de vendedores).
    - Motivo: Rótulos e nomes de empresas/produtos são longos e não devem ser cortados no mobile.
-   - Exemplo:
+   - Exemplo estrutural:
 \`\`\`dashboard
 {
   "type": "horizontal-bar",
-  "title": "Top 5 Maiores Clientes por Faturamento",
+  "title": "<TÍTULO_DO_RANKING_REAL>",
   "data": [
-    {"name": "Indústria Metalúrgica Silva & Santos Ltda", "value": 850400.00},
-    {"name": "Comércio e Distribuidora Nacional S/A", "value": 620150.00},
-    {"name": "Supermercados Aliança do Brasil", "value": 489300.00},
-    {"name": "Transportes e Logística Express", "value": 310800.00},
-    {"name": "Farmacêutica Central de Distribuição", "value": 245000.00}
+    {"name": "<NOME_REAL_DO_REGISTRO_1>", "value": 0.00},
+    {"name": "<NOME_REAL_DO_REGISTRO_2>", "value": 0.00}
   ]
 }
 \`\`\`
 
 3. "bar" — COMPARAÇÕES DISCRETAS (< 7 CATEGORIAS):
    - Indicação: Comparações diretas entre poucas categorias discretas (< 7 categorias). Ex: comparação de faturamento entre 3 filiais ou 4 trimestres.
-   - Exemplo:
+   - Exemplo estrutural:
 \`\`\`dashboard
 {
   "type": "bar",
-  "title": "Faturamento Comparativo por Filial",
+  "title": "<TÍTULO_COMPARATIVO_REAL>",
   "data": [
-    {"name": "Matriz SP", "value": 450000.00},
-    {"name": "Filial RJ", "value": 280000.00},
-    {"name": "Filial MG", "value": 195000.00}
+    {"name": "<CATEGORIA_REAL_1>", "value": 0.00},
+    {"name": "<CATEGORIA_REAL_2>", "value": 0.00}
   ]
 }
 \`\`\`
@@ -305,30 +407,27 @@ Escolha rigorosamente o valor do campo "type" conforme a natureza da informaçã
 4. "pie" — COMPOSIÇÃO / PARTICIPAÇÃO PERCENTUAL (% DO TODO, 3 A 5 CATEGORIAS):
    - Indicação: Composição ou participação percentual (% do todo, market share) com poucas fatias (3 a 5 categorias no máximo). Ex: distribuição por forma de pagamento, vendas por canal.
    - RESTRIÇÃO: NUNCA usar "pie" para séries temporais nem para mais de 6 categorias.
-   - Exemplo:
+   - Exemplo estrutural:
 \`\`\`dashboard
 {
   "type": "pie",
-  "title": "Composição de Vendas por Canal",
+  "title": "<TÍTULO_DE_PARTICIPAÇÃO_REAL>",
   "data": [
-    {"name": "Atacado", "value": 55.4},
-    {"name": "E-commerce", "value": 28.2},
-    {"name": "Varejo", "value": 16.4}
+    {"name": "<FATIA_REAL_1>", "value": 0.0},
+    {"name": "<FATIA_REAL_2>", "value": 0.0}
   ]
 }
 \`\`\`
 
 5. "table" — RELATÓRIOS ANALÍTICOS MULTIDIMENSIONAIS (OBRIGATÓRIO PARA 3+ ATRIBUTOS):
    - Indicação: Obrigatório para relatórios analíticos e consultas com 3 ou mais atributos de detalhe (ex: listagem com Código, Nome, Limite de Crédito, Saldo e Status).
-   - Exemplo:
+   - Exemplo estrutural:
 \`\`\`dashboard
 {
   "type": "table",
-  "title": "Extrato Analítico de Clientes e Saldos",
+  "title": "<TÍTULO_DO_RELATÓRIO_REAL>",
   "data": [
-    {"codParc": 101, "cliente": "Agrocomercial do Cerrado", "limiteCredito": 50000.00, "saldoDevedor": 12500.00, "status": "Ativo"},
-    {"codParc": 204, "cliente": "Viação & Turismo Progresso", "limiteCredito": 80000.00, "saldoDevedor": 0.00, "status": "Ativo"},
-    {"codParc": 315, "cliente": "Mecânica e Peças Horizonte", "limiteCredito": 20000.00, "saldoDevedor": 19800.00, "status": "Bloqueado"}
+    {"codigo": "<COD_REAL_1>", "descricao": "<NOME_REAL_1>", "valor": 0.00}
   ]
 }
 \`\`\`
@@ -368,14 +467,13 @@ REGRAS ESTRITAS DO JSON:
 	 * Analisa a pergunta do usuário, consulta o Dicionário de Dados, gera e executa a query SQL
 	 * no PostgreSQL e retorna o contexto enriquecido com os dados reais (ou bloqueio determinístico anti-alucinação) para o LLM.
 	 */
-	async retrieveDatabaseContext(userQuestion: string): Promise<string | null> {
-		const result = await this.executeRagPipeline(userQuestion);
+	async retrieveDatabaseContext(
+		userQuestion: string,
+		history?: Array<{ role: string; parts: Array<{ text: string }> }>,
+	): Promise<string | null> {
+		const result = await this.executeRagPipeline(userQuestion, history);
 
-		if (
-			result.reason === 'EMPTY_QUESTION' ||
-			result.reason === 'INVALID_OR_UNSAFE_SQL' ||
-			result.reason === 'EXECUTION_ERROR'
-		) {
+		if (result.reason === 'EMPTY_QUESTION') {
 			return null;
 		}
 

@@ -19,7 +19,7 @@ import {
 import { DynamicDashboard } from '../components/chat/DynamicDashboard';
 import { ErrorBoundary } from '../components/common/ErrorBoundary';
 import { useChat } from '../hooks/useChat';
-import type { ChatMessage } from '../hooks/useChat';
+import type { ChatMessage, ChatStatusStep } from '../hooks/useChat';
 
 interface SuggestedCategory {
 	id: string;
@@ -89,30 +89,42 @@ const SUGGESTED_CATEGORIES: SuggestedCategory[] = [
 
 const LOADING_STEPS = [
 	{
-		title: 'Analisando pergunta...',
-		subtitle: 'Identificando intenção, filtros e métricas solicitadas',
+		title: 'Analisando pergunta e contexto...',
+		subtitle: 'Interpretando histórico da conversa (Query Rewriter)',
 	},
 	{
 		title: 'Consultando dados sincronizados do Sankhya ERP...',
-		subtitle: 'Executando leitura segura nas tabelas espelhadas do ERP',
+		subtitle: 'Executando leitura segura nas tabelas espelhadas do PostgreSQL',
 	},
 	{
-		title: 'Processando indicadores...',
-		subtitle: 'Consolidando números e formatando visualização inteligente',
+		title: 'Elaborando análise e indicadores...',
+		subtitle: 'Consolidando números reais e formatando visualização',
+	},
+	{
+		title: 'Auditando resposta (Agente Revisor)...',
+		subtitle: 'Verificando precisão factual contra o banco de dados',
 	},
 ];
 
-const DidacticProgressIndicator: React.FC = React.memo(() => {
-	const [activeStep, setActiveStep] = useState(0);
+interface DidacticProgressIndicatorProps {
+	statusStep?: ChatStatusStep | null;
+}
+
+const DidacticProgressIndicator: React.FC<DidacticProgressIndicatorProps> = React.memo(({ statusStep }) => {
+	const [fallbackStep, setFallbackStep] = useState(0);
 
 	useEffect(() => {
-		const timer1 = window.setTimeout(() => setActiveStep(1), 1300);
-		const timer2 = window.setTimeout(() => setActiveStep(2), 3000);
+		const timer1 = window.setTimeout(() => setFallbackStep(1), 1100);
+		const timer2 = window.setTimeout(() => setFallbackStep(2), 2400);
+		const timer3 = window.setTimeout(() => setFallbackStep(3), 4200);
 		return () => {
 			window.clearTimeout(timer1);
 			window.clearTimeout(timer2);
+			window.clearTimeout(timer3);
 		};
 	}, []);
+
+	const activeStep = statusStep ? Math.min(LOADING_STEPS.length - 1, Math.max(0, statusStep.step - 1)) : fallbackStep;
 
 	return (
 		<div
@@ -134,6 +146,8 @@ const DidacticProgressIndicator: React.FC = React.memo(() => {
 				{LOADING_STEPS.map((step, index) => {
 					const isCompleted = index < activeStep;
 					const isCurrent = index === activeStep;
+					const displayTitle = isCurrent && statusStep?.title ? statusStep.title : step.title;
+					const displaySubtitle = isCurrent && statusStep?.subtitle ? statusStep.subtitle : step.subtitle;
 					return (
 						<div
 							key={step.title}
@@ -156,10 +170,10 @@ const DidacticProgressIndicator: React.FC = React.memo(() => {
 							</div>
 							<div className="min-w-0 flex-1">
 								<p className={`font-medium ${isCurrent ? 'text-slate-900' : 'text-slate-600'}`}>
-									{step.title}
+									{displayTitle}
 								</p>
 								{isCurrent && (
-									<p className="mt-0.5 text-[11px] text-slate-500">{step.subtitle}</p>
+									<p className="mt-0.5 text-[11px] text-slate-500">{displaySubtitle}</p>
 								)}
 							</div>
 						</div>
@@ -236,10 +250,11 @@ const markdownComponents = {
 interface ChatMessageItemProps {
 	message: ChatMessage;
 	isStreaming: boolean;
+	statusStep?: ChatStatusStep | null;
 }
 
 const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(
-	({ message, isStreaming }) => {
+	({ message, isStreaming, statusStep }) => {
 		const isUser = message.role === 'user';
 
 		return (
@@ -271,7 +286,7 @@ const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(
 								)}
 							</div>
 						) : (
-							<DidacticProgressIndicator />
+							<DidacticProgressIndicator statusStep={statusStep} />
 						)
 					) : (
 						<p className="whitespace-pre-wrap break-words">{message.content}</p>
@@ -284,7 +299,9 @@ const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(
 		prevProps.message.id === nextProps.message.id &&
 		prevProps.message.content === nextProps.message.content &&
 		prevProps.message.role === nextProps.message.role &&
-		prevProps.isStreaming === nextProps.isStreaming
+		prevProps.isStreaming === nextProps.isStreaming &&
+		prevProps.statusStep?.step === nextProps.statusStep?.step &&
+		prevProps.statusStep?.title === nextProps.statusStep?.title
 );
 
 ChatMessageItem.displayName = 'ChatMessageItem';
@@ -294,7 +311,7 @@ export default function Chat() {
 	const [showSuggestionsDrawer, setShowSuggestionsDrawer] = useState(false);
 	const bottomRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
-	const { messages, isLoading, error, sendMessage, stopGeneration, clearMessages } = useChat();
+	const { messages, isLoading, statusStep, error, sendMessage, stopGeneration, clearMessages } = useChat();
 
 	useEffect(() => {
 		bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -391,6 +408,7 @@ export default function Chat() {
 							key={message.id}
 							message={message}
 							isStreaming={isLoading && message.id === lastMessageId && message.role === 'assistant'}
+							statusStep={isLoading && message.id === lastMessageId && message.role === 'assistant' ? statusStep : null}
 						/>
 					))}
 					<div ref={bottomRef} />

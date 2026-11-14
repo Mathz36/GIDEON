@@ -3,7 +3,8 @@ import { NextFunction, Request, Response, Router } from 'express';
 import GeminiService, { GeminiMessage, GeminiParameters } from '../services/gemini.service';
 import erpConfigurationService, { ErpConfigurationInput } from '../services/erp-configuration.service';
 import aiConfigurationService, { AiConfigurationInput } from '../services/ai-configuration.service';
-import chatRagService from '../services/chat-rag.service';
+import chatRagService, { RagPipelineResult } from '../services/chat-rag.service';
+import { ResponseReviewerService } from '../services/response-reviewer.service';
 import SankhyaService from '../services/sankhya.service';
 import authRouter from './auth.routes';
 import userRouter from './user.routes';
@@ -151,6 +152,24 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 	try {
 		const history = validateHistory(req.body.history);
 
+		// Abre o canal SSE imediatamente para emitir eventos de progresso real ao frontend
+		res.status(200);
+		res.set({
+			'Content-Type': 'text/event-stream; charset=utf-8',
+			'Cache-Control': 'no-cache, no-transform',
+			Connection: 'keep-alive',
+			'X-Accel-Buffering': 'no',
+		});
+		res.flushHeaders();
+
+		const emitStatus = (step: number, title: string, subtitle: string) => {
+			if (!res.writableEnded && !res.closed) {
+				res.write(`event: status\ndata: ${JSON.stringify({ step, title, subtitle })}\n\n`);
+			}
+		};
+
+		emitStatus(1, 'Analisando pergunta e contexto...', 'Interpretando histórico da conversa (Query Rewriter)');
+
 		// Carrega as configurações da IA e as integrações cadastradas do banco de dados
 		const aiConfig = await aiConfigurationService.get();
 		const erpIntegrations = await erpConfigurationService.list();
@@ -162,19 +181,28 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 			)).join('\n');
 		}
 
-		// Executa pipeline RAG / Text-to-SQL para buscar dados reais no banco de dados
+		// Executa pipeline RAG / Text-to-SQL com Query Rewriter e Self-Healing SQL Retry
 		const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.parts.map((p) => p.text).join(' ') ?? '';
-		let realDatabaseContext = '';
+		let ragResult: RagPipelineResult = {
+			noDataFound: true,
+			reason: 'EMPTY_QUESTION',
+			fallbackMessage: null,
+			contextPrompt: null,
+			generatedSql: null,
+			rowCount: 0,
+			rows: [],
+		};
+
 		if (lastUserMessage) {
+			emitStatus(2, 'Consultando dados sincronizados do Sankhya ERP...', 'Executando query segura Read-Only no PostgreSQL');
 			try {
-				const dbContext = await chatRagService.retrieveDatabaseContext(lastUserMessage);
-				if (dbContext) {
-					realDatabaseContext = `\n\n${dbContext}`;
-				}
+				ragResult = await chatRagService.executeRagPipeline(lastUserMessage, history);
 			} catch (ragErr) {
 				console.warn('[ChatRoute] Erro ao buscar dados reais via RAG:', ragErr);
 			}
 		}
+
+		const realDatabaseContext = ragResult.contextPrompt ? `\n\n${ragResult.contextPrompt}` : '';
 
 		const baseSystemPrompt = (typeof req.body.systemPrompt === 'string' && req.body.systemPrompt.trim())
 			? req.body.systemPrompt.trim()
@@ -194,23 +222,27 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 		}
 
 		const gemini = new GeminiService();
+		const reviewer = new ResponseReviewerService(gemini, 2);
 
-		res.status(200);
-		res.set({
-			'Content-Type': 'text/event-stream; charset=utf-8',
-			'Cache-Control': 'no-cache, no-transform',
-			Connection: 'keep-alive',
-			'X-Accel-Buffering': 'no',
+		// Executa Geração + Revisão em 2 Camadas (Guardrail Determinístico + Agente Crítico LLM) + Auto-Correção + Fallback Determinístico
+		const reviewOutcome = await reviewer.generateAndReviewResponse({
+			userQuestion: lastUserMessage,
+			history,
+			systemPrompt,
+			ragResult,
+			parameters,
+			onStatusUpdate: (st) => emitStatus(st.step, st.title, st.subtitle),
 		});
-		res.flushHeaders();
 
-		for await (const text of gemini.streamResponse(history, systemPrompt, parameters)) {
+		const validatedText = reviewOutcome.finalResponse;
+		const chunkSize = 180;
+
+		for (let offset = 0; offset < validatedText.length; offset += chunkSize) {
 			if (res.writableEnded || res.closed) {
 				break;
 			}
-
-			// JSON encoding preserves line breaks and avoids SSE frame injection by model output.
-			if (!res.write(`data: ${JSON.stringify({ text })}\n\n`)) {
+			const textChunk = validatedText.slice(offset, offset + chunkSize);
+			if (!res.write(`data: ${JSON.stringify({ text: textChunk })}\n\n`)) {
 				await waitForDrain(res);
 			}
 		}

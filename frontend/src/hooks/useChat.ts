@@ -6,9 +6,18 @@ export interface ChatMessage {
 	content: string;
 }
 
+export interface ChatStatusStep {
+	step: number;
+	title: string;
+	subtitle: string;
+}
+
 interface GeminiStreamPayload {
 	text?: unknown;
 	message?: unknown;
+	step?: unknown;
+	title?: unknown;
+	subtitle?: unknown;
 }
 
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -16,6 +25,7 @@ const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Mat
 export function useChat() {
 	const [messages, setMessages] = useState<ChatMessage[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
+	const [statusStep, setStatusStep] = useState<ChatStatusStep | null>(null);
 	const [error, setError] = useState('');
 	const abortControllerRef = useRef<AbortController | null>(null);
 	const messagesRef = useRef<ChatMessage[]>([]);
@@ -149,6 +159,15 @@ export function useChat() {
 						);
 					}
 
+					if (eventName === 'status' && typeof payload.step === 'number' && typeof payload.title === 'string') {
+						setStatusStep({
+							step: payload.step,
+							title: payload.title,
+							subtitle: typeof payload.subtitle === 'string' ? payload.subtitle : '',
+						});
+						continue;
+					}
+
 					if (typeof payload.text === 'string') {
 						appendChunk(payload.text);
 					}
@@ -198,11 +217,12 @@ export function useChat() {
 			if (abortControllerRef.current === controller) {
 				abortControllerRef.current = null;
 				setIsLoading(false);
+				setStatusStep(null);
 			}
 		}
 	}, []);
 
-	return { messages, isLoading, error, sendMessage, stopGeneration, clearMessages };
+	return { messages, isLoading, statusStep, error, sendMessage, stopGeneration, clearMessages };
 }
 
 function formatFriendlyError(error: unknown): string {

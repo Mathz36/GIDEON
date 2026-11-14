@@ -341,3 +341,38 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/components/common/ErrorBoundary.tsx`
   - `frontend/src/pages/UserDashboard.tsx`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Pacote Completo Anti-Alucinação: Fechamento do RAG, Query Rewriter, Self-Healing SQL e Agente Revisor (Reflection Loop)
+- **Agentes Responsáveis:** `planner`, `ai-specialist`, `backend`, `frontend`, `tester`
+- **Tipo:** `feat` / `fix` / `test`
+- **Contexto & Motivação:**
+  A Gideon apresentava alucinações no Chat quando ocorriam erros de sintaxe/segurança no Text-to-SQL (`retrieveDatabaseContext` retornava `null`, deixando o LLM sem contexto e sem restrição), em perguntas conversacionais dependentes de histórico ("E quais notas ele tem?"), por contaminação de exemplos few-shot no System Prompt e pela ausência de uma camada de auditoria/revisão antes da exibição ao usuário.
+- **Implementações Realizadas:**
+  1. **Pilar 1 — Fechamento do "Buraco Negro" do RAG & Self-Healing SQL Retry (`chat-rag.service.ts`, `ai-configuration.service.ts`):**
+     - `retrieveDatabaseContext` jamais retorna `null` em falhas (`INVALID_OR_UNSAFE_SQL`, `EXECUTION_ERROR`), injetando obrigatoriamente `buildDeterministicNoDataPrompt` com proibição absoluta de invenção de dados.
+     - Adicionado **Self-Healing SQL Retry**: se a primeira query SQL falhar na execução do PostgreSQL (ex: coluna inexistente ou falta de CAST), o serviço envia o erro exato do banco de volta ao gerador SQL (`temperature: 0.0`) para auto-correção imediata antes de desistir.
+     - Substituídos todos os exemplos com nomes de empresas fictícias nos prompts (`ai-configuration.service.ts` e `chat-rag.service.ts`) por placeholders estruturais neutros (`<NOME_REAL_DO_REGISTRO_1>`) e reduzida a `temperature` padrão de `0.7` para `0.1`.
+  2. **Pilar 2 — Query Rewriter Contextual Multi-Turn (`chat-rag.service.ts`):**
+     - Implementado `rewriteQueryWithHistory(userQuestion, history)` que analisa as últimas mensagens da conversa e reescreve perguntas dependentes de contexto (ex: *"E quanto ele comprou?"* -> *"Quanto o cliente X comprou?"*) tornando-as 100% autocontidas para o Text-to-SQL.
+  3. **Pilar 3 — Agente Revisor de Grounding, Loop de Auto-Correção e Fallback Determinístico (`response-reviewer.service.ts`, `number-sanitizer.ts`, `api.ts`):**
+     - Pré-cálculo determinístico em TypeScript (`computeDeterministicAggregates`) de somas, médias, mínimos e máximos das colunas numéricas retornadas pelo PostgreSQL, injetado no prompt para eliminar erros de cálculo mental do LLM.
+     - **Camada 1 do Revisor (Guardrail Determinístico - 0ms):** Bloqueia instantaneamente nomes fictícios banidos, vazamento de código SQL técnico, JSON de gráfico malformado e qualquer invenção de valores monetários (`R$`) ou gráficos quando `noDataFound: true`.
+     - **Camada 2 do Revisor (Agente Crítico LLM - Constitutional Reviewer):** Audita semanticamente se a resposta gerada responde à pergunta do usuário utilizando exclusivamente os registros reais do PostgreSQL.
+     - **Loop de Auto-Correção (Reflection Loop):** Caso reprovada, a resposta retorna ao modelo com o apontamento exato do Auditor para regeneração (até 2 retentativas com `temperature: 0.0`).
+     - **Fallback Determinístico Final (`buildDeterministicFallbackResponse`):** Se todas as tentativas falharem, constrói programaticamente a resposta executiva e a tabela `dashboard` diretamente a partir das linhas reais do PostgreSQL, tornando matematicamente impossível vazar alucinações.
+  4. **Feedback Visual de Auditoria em Tempo Real no Frontend (`useChat.ts`, `Chat.tsx`):**
+     - Suporte a eventos SSE `event: status` transmitindo em tempo real as 4 etapas ao componente `DidacticProgressIndicator` (incluindo a etapa *"Auditando resposta (Agente Revisor)..."* e eventuais auto-correções).
+  5. **Garantia de Qualidade & Testes Automatizados (`rag-reviewer-and-rewriter.test.ts`):**
+     - Adicionados 7 novos testes cobrindo fechamento do buraco negro do RAG, Self-Healing SQL Retry, Query Rewriter multi-turn, Guardrail Determinístico, Loop de Auto-Correção do Agente Crítico e Fallback Determinístico.
+     - Suíte total com **77/77 testes passando (100% de sucesso)** e build Vite do frontend sem erros.
+- **Arquivos Impactados:**
+  - `backend/src/services/response-reviewer.service.ts`
+  - `backend/src/utils/number-sanitizer.ts`
+  - `backend/src/services/chat-rag.service.ts`
+  - `backend/src/services/ai-configuration.service.ts`
+  - `backend/src/routes/api.ts`
+  - `backend/src/__tests__/rag-reviewer-and-rewriter.test.ts`
+  - `frontend/src/hooks/useChat.ts`
+  - `frontend/src/pages/Chat.tsx`
+  - `MEMORY_PALACE.md`
