@@ -104,8 +104,8 @@ describe('ChatFeedbackService — Avaliação de Respostas e Dashboard de Qualid
 			conversationId: 'conv-101',
 			messageId: 'msg-1',
 			rating: 'NEGATIVE',
-			tags: ['Valor / Cálculo incorreto', 'Faltou considerar devolução'],
-			comment: 'O faturamento de outubro parece não ter abatido a nota de devolução.',
+			tags: ['Valor / Cálculo incorreto', 'Faltou informação'],
+			comment: 'O faturamento de outubro parece incompleto.',
 			userPrompt: 'Qual foi o faturamento líquido de outubro?',
 			assistantResponse: 'O faturamento líquido de outubro foi de R$ 150.000,00.',
 			fullConversation: [
@@ -119,7 +119,7 @@ describe('ChatFeedbackService — Avaliação de Respostas e Dashboard de Qualid
 		assert.equal(created.rating, 'NEGATIVE');
 		assert.equal(created.status, 'PENDING');
 		assert.equal(created.userName, 'Matheus Henrique');
-		assert.deepEqual(created.tags, ['Valor / Cálculo incorreto', 'Faltou considerar devolução']);
+		assert.deepEqual(created.tags, ['Valor / Cálculo incorreto', 'Faltou informação']);
 		assert.equal(created.fullConversation.length, 4);
 		assert.ok(created.contextSummary.includes('Qual foi o faturamento líquido de outubro?'));
 		assert.ok(created.contextSummary.includes('Consulta SQL executada'));
@@ -162,7 +162,7 @@ describe('ChatFeedbackService — Avaliação de Respostas e Dashboard de Qualid
 			userId: 'user-1',
 			messageId: 'msg-neg-1',
 			rating: 'NEGATIVE',
-			tags: ['SQL / Filtro incorreto'],
+			tags: ['Informação incorreta'],
 			userPrompt: 'Quantos clientes ativos temos?',
 			assistantResponse: 'Temos 500 clientes.',
 		});

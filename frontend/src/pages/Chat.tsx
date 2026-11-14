@@ -334,10 +334,11 @@ const POSITIVE_FEEDBACK_TAGS = [
 ];
 
 const NEGATIVE_FEEDBACK_TAGS = [
-	'Valor divergente do ERP',
+	'Informação incorreta',
+	'Faltou informação',
+	'Valor / Cálculo incorreto',
 	'Gráfico inadequado',
 	'Não entendeu a pergunta',
-	'Resposta incompleta',
 	'Outro motivo',
 ];
 
