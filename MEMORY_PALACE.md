@@ -446,3 +446,27 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/components/erp/SchemaDiagramExplorer.tsx`
   - `frontend/src/pages/AdminERP.tsx`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Canvas Interativo Supabase Studio para o Diagrama ER, Radar Minimap e Modal Flutuante de Edição
+- **Agentes Responsáveis:** `frontend`, `planner`, `backend`
+- **Tipo:** `feat` / `refactor`
+- **Contexto & Motivação:**
+  O usuário solicitou uma experiência de visualização de esquema idêntica à do **Supabase Studio**, com canvas infinito dot grid escuro, nós de tabelas arrastáveis (drag & drop), linhas de conexão SVG curvas com marcadores para chaves estrangeiras (`FK ➔ PK`), radar minimap no canto inferior direito e um **Popup / Modal flutuante centralizado** que se abre ao clicar na tabela para inspecionar e editar descrições da tabela, das colunas, PK e FKs.
+- **Implementações Realizadas:**
+  1. **Canvas Interativo Infinito estilo Supabase Studio (`SchemaDiagramExplorer.tsx`):**
+     - Dot grid escuro (`radial-gradient(#262a36 1px, transparent 1px)`) com aceleração por GPU.
+     - Pan suave com mouse/touch e Zoom suave centrado no scroll (0.3x a 2.0x).
+     - Drag & drop livre das caixas de tabelas pelo cabeçalho, com persistência automática de coordenadas no `localStorage` (`gideon_supabase_schema_positions_v1`).
+     - Botão **"Auto-Organizar" (Auto-Layout)** com organização em colunas/camadas lógicas (dimensões à esquerda, associações/cabeçalhos ao centro, fatos detalhados à direita) e botão **"Ajustar à Tela" (Fit to View)**.
+     - Botão de alternância de **Tela Cheia (Fullscreen)** para visualização imersiva do banco de dados.
+  2. **Nós de Tabelas e Arestas SVG de Relacionamentos (`SchemaDiagramExplorer.tsx`):**
+     - Cards retangulares no estilo Supabase Studio com cabeçalho mono escuro, indicador de total de colunas, contagem de linhas reais no PostgreSQL e ícones de chave dourada (`PK`) e chave/elo azul (`FK`).
+     - Linhas SVG em curvas cúbicas de Bézier conectando com precisão a porta da coluna FK na tabela de origem até a porta da coluna PK na tabela de destino, com realce brilhante ao passar o mouse.
+  3. **Radar Minimap no Canto Inferior Direito (`SchemaDiagramExplorer.tsx`):**
+     - Miniatura proporcional do mundo e de todas as tabelas com viewport retangular semitransparente em tempo real indicando a posição da câmera.
+  4. **Popup / Modal Flutuante de Edição (`SchemaDiagramExplorer.tsx`):**
+     - Ao clicar ou selecionar qualquer tabela no canvas, um modal flutuante centralizado com backdrop blur escuro é aberto para edição da descrição da tabela, seleção de PK, mapeamento de FKs e edição das descrições obrigatórias de cada coluna (com injeção em 1 clique de valores reais do PostgreSQL).
+- **Arquivos Impactados:**
+  - `frontend/src/components/erp/SchemaDiagramExplorer.tsx`
+  - `MEMORY_PALACE.md`
