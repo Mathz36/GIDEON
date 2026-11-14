@@ -416,12 +416,12 @@ function shouldEnforceNetBillingMinusReturns(sql: string, normQuestion: string):
 	if (/\bAVG\s*\(/i.test(sql) && /\bMAX\s*\(/i.test(sql)) {
 		return false;
 	}
-	// Só aplica quando há SUM(CAST(...valor_liquido... AS NUMERIC)) e a pergunta pede faturamento / quanto faturou
+	// Só aplica quando há SUM(CAST(...valor_liquido|valor_bruto... AS NUMERIC)) e a pergunta pede faturamento ou valor de venda/vendas
 	const hasSumValor = /\bSUM\s*\(\s*CAST\s*\(\s*[a-zA-Z0-9_."]*valor_(?:liquido|bruto)\s+AS\s+NUMERIC\s*\)\s*\)/i.test(sql);
-	const asksForBilling = /\b(fatur|faturou|faturamento)\w*/i.test(normQuestion);
-	const asksForBonificacaoOrDevolucaoOnly = /\b(bonific|brind|troc)\w*/i.test(normQuestion);
+	const asksForBillingOrSales = /\b(fatur|faturou|faturamento|vend|receit)\w*/i.test(normQuestion);
+	const asksForBonificacaoOrDevolucaoOnly = /\b(bonific|brind|troc|devoluc|devolv)\w*/i.test(normQuestion);
 
-	return hasSumValor && asksForBilling && !asksForBonificacaoOrDevolucaoOnly;
+	return hasSumValor && asksForBillingOrSales && !asksForBonificacaoOrDevolucaoOnly;
 }
 
 function upgradeToNetBillingMinusReturns(sql: string): string {

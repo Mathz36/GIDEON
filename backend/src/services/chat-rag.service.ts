@@ -210,9 +210,9 @@ export class ChatRagService {
      * Agrupar por mês: TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'MM/YYYY') AS mes ... ORDER BY MIN(CAST(data_emissao AS TIMESTAMP)) ASC
 2. TRATAMENTO DE VALORES NUMÉRICOS, OPERAÇÕES E ENGENHARIA DE EIXOS:
    - Colunas numéricas armazenadas como TEXT (ex: valor_bruto, valor_liquido, quantidade, peso) DEVEM receber CAST(coluna AS NUMERIC) ao usar SUM, AVG ou comparações numéricas (> ou <).
-   - REGRA PADRÃO DE FATURAMENTO (VALOR LÍQUIDO - DEVOLUÇÃO LÍQUIDA): Sempre que alguém perguntar "quanto faturou", "faturamento", "vendas" ou "receita" (sem pedir explicitamente "bruto"), utilize OBRIGATORIAMENTE a coluna "valor_liquido" subtraindo as devoluções de vendas:
-     SUM(CASE WHEN operacao = 'VENDAS' THEN CAST(valor_liquido AS NUMERIC) WHEN operacao = 'DEVOLUÇÃO DE VENDAS' THEN -CAST(valor_liquido AS NUMERIC) ELSE 0 END) com WHERE operacao IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS').
-   - REGRA DO VALOR BRUTO (SOMENTE QUANDO EXPLÍCITO): Só utilize "valor_bruto" quando o usuário pedir EXPLICITAMENTE "bruto" ou "bruta" (ex: "faturamento bruto", "bonificação bruta"). O mesmo vale para bonificação: por padrão use "valor_liquido" e só use "valor_bruto" se pedir explicitamente "bruto".
+   - DIFERENÇA ENTRE VALOR BRUTO E VALOR LÍQUIDO (DESCONTO): "valor_bruto" é o valor SEM desconto; "valor_liquido" é o valor COM desconto aplicado. O valor padrão mais usado pela empresa é SEMPRE "valor_liquido". Só utilize "valor_bruto" quando o usuário pedir EXPLICITAMENTE "bruto" ou "bruta".
+   - CÁLCULO DE FATURAMENTO E VALOR DE VENDA (SEMPRE VENDA - DEVOLUÇÃO): Sempre que alguém perguntar sobre faturamento, quanto faturou, valor de venda ou vendas, estamos falando SEMPRE de VENDA menos DEVOLUÇÃO:
+     SUM(CASE WHEN operacao = 'VENDAS' THEN CAST(valor_liquido AS NUMERIC) WHEN operacao = 'DEVOLUÇÃO DE VENDAS' THEN -CAST(valor_liquido AS NUMERIC) ELSE 0 END) com WHERE operacao IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS') (ou usando valor_bruto se pedir explicitamente "bruto").
    - PROIBIÇÃO CRÍTICA DE EIXOS: NUNCA use "nota_fiscal", "id", "pedido_origem" ou "cod_*" como substituto de data/dia no eixo X (ex: PROIBIDO fazer SELECT nota_fiscal AS dia). Para evolução diária, agrupe SEMPRE pela coluna de data formatada ('DD/MM'). Para faturamento/valor financeiro, some SEMPRE "valor_liquido" (ou "valor_bruto" quando explícito), NUNCA "quantidade".${businessRulesSection}`,
 			});
 
