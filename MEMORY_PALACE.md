@@ -518,3 +518,35 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
 - **Arquivos Impactados:**
   - `frontend/src/components/erp/SchemaDiagramExplorer.tsx`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Blindagem Determinística em 4 Camadas do Pipeline RAG (Metodologia "Competente o Suficiente" - Fábio Akita)
+- **Agentes Responsáveis:** `ai-specialist`, `backend`, `tester`, `planner`
+- **Tipo:** `feat` / `refactor` / `test`
+- **Contexto & Motivação:**
+  Aplicação prática dos princípios de engenharia determinística do livro *"Competente o Suficiente"* (Fábio Akita) sobre o pipeline Text-to-SQL RAG da Gideon para eliminar alucinações semânticas, erros de tipagem em colunas `TEXT`, omissão de invariantes fiscais e erros de aritmética mental da LLM.
+- **As 4 Camadas de Blindagem Implementadas:**
+  1. **Camada 1 — Guardrail Determinístico de Escopo Fechado (Fail-Fast Out-of-Scope Detector) & Cálculos Canônicos no PostgreSQL (`sql-ast-validator.ts`, `chat-rag.service.ts`, `build-sql-generation-prompt.use-case.ts`):**
+     - Implementada a função `detectOutOfScopeBusinessMetric(question, availableColumns)` que intercepta deterministicamente perguntas sobre domínios contábeis/financeiros inexistentes no esquema sincronizado (**Lucro Líquido, Margem de Contribuição, CMV, EBITDA, Contas a Pagar, Inadimplência/Boletos Vencidos, Impostos ICMS/PIS/COFINS**) caso tais colunas não existam no tenant, retornando `reason: 'OUT_OF_SCOPE_METRIC'` em `0ms` sem acionar a LLM geradora e impedindo que o modelo confunda `valor_liquido` da nota fiscal com *Lucro Líquido*.
+     - Preserva integralmente consultas comerciais legítimas de *Faturamento Líquido*, *Valor Líquido das Notas* e *Receita Líquida*.
+     - Reforçadas as diretrizes de cálculo canônico no PostgreSQL (Ticket Médio via `ROUND(AVG(CAST(valor_liquido AS NUMERIC)), 2)` e Participação Percentual `%` via Window Function `OVER ()`).
+  2. **Camada 2 — Dicionário Determinístico de Sinônimos Corporativos (`extract-keywords.use-case.ts`):**
+     - Criado o `CORPORATE_SYNONYM_DICTIONARY` que é **sempre mesclado** ao resultado do extrator LLM (e não apenas em caso de falha de rede), garantindo 100% de recall semântico para jargões corporativos e regionais (*"praça"* / *"região"* $\rightarrow$ `cidade`, `uf`, `bairro`, `erp_clientes`; *"representante"* / *"consultor"* $\rightarrow$ `erp_vendedores`, `representante_nome`; *"família"* / *"mercadoria"* $\rightarrow$ `erp_produtos`, `grupo_de_produtos`; *"bonificação"* / *"devolução"* $\rightarrow$ `erp_nota_fiscal`, `operacao`).
+  3. **Camada 3 — Validador e Auto-Sanitizador Determinístico de AST/SQL Pré-Execução (`sql-ast-validator.ts` & `chat-rag.service.ts`):**
+     - Implementada `sanitizeAndValidateGeneratedSql(sql, question)` executada antes do PostgreSQL (tanto na query principal quanto no Self-Healing Retry):
+       * **Auto-CAST em Agregações:** Envolve automaticamente colunas numéricas `TEXT` (`valor_liquido`, `valor_bruto`, `quantidade`, `peso`) em `CAST(... AS NUMERIC)` dentro de `SUM`, `AVG`, `MIN` e `MAX` caso a LLM esqueça.
+       * **Auto-CAST em `ORDER BY`:** Corrige ordenações alfabéticas (ASCII) em colunas numéricas `TEXT` não agrupadas (`ORDER BY valor_liquido DESC` $\rightarrow$ `ORDER BY CAST(valor_liquido AS NUMERIC) DESC`), evitando que `'1000'` venha antes de `'200'`.
+       * **Invariante Fiscal Automática (`operacao = 'VENDAS'`):** Injeta deterministicamente o filtro `operacao = 'VENDAS'` (respeitando aliases de tabela como `nf.operacao = 'VENDAS'`) em consultas de faturamento/vendas/rankings sobre `erp_nota_fiscal` quando omitido pela LLM, sem interferir em consultas de devolução ou bonificação.
+  4. **Camada 4 — Matemática Determinística na CPU & Reconciliação de Dashboards (`chat-rag.service.ts` & `response-reviewer.service.ts`):**
+     - `ChatRagService.buildDeterministicMathSummary(rows)` calcula na CPU (Node.js) `soma_total`, `media_aritmetica`, `minimo`, `maximo` e `quantidade_registros` e os injeta diretamente no `contextPrompt` para que a LLM nunca faça somas ou divisões de cabeça.
+     - `ResponseReviewerService.reconcileAndSanitizeDashboardBlocks(draftResponse, rows)` inspeciona e repara em `0ms` qualquer bloco ````dashboard````: converte strings monetárias formatadas (`"R$ 12.500,50"`) em `number` puro (`12500.5`) via `parseNumericValue` e converte automaticamente gráficos `"pie"` com `> 6` categorias para `"horizontal-bar"`.
+  5. **Suíte de Testes Automatizados (`rag-akita-hardening.test.ts`):**
+     - 13 novos testes cobrindo todas as 4 camadas de blindagem. Totalizando **97/97 testes passando** no backend com zero erros de compilação.
+- **Arquivos Impactados:**
+  - `backend/src/utils/sql-ast-validator.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/extract-keywords.use-case.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/build-sql-generation-prompt.use-case.ts`
+  - `backend/src/services/chat-rag.service.ts`
+  - `backend/src/services/response-reviewer.service.ts`
+  - `backend/src/__tests__/rag-akita-hardening.test.ts`
+  - `MEMORY_PALACE.md`

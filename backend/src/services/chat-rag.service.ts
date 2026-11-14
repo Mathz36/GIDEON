@@ -2,9 +2,15 @@ import prismaClient from '../config/prisma';
 import GeminiService from './gemini.service';
 import { ragSqlPipeline } from '../modules/data-dictionary';
 import { sanitizeRowsForLgpd, sanitizeRowForLgpd } from '../utils/lgpd-sanitizer';
+import {
+	detectOutOfScopeBusinessMetric,
+	sanitizeAndValidateGeneratedSql,
+} from '../utils/sql-ast-validator';
+import { parseNumericValue } from '../utils/number-sanitizer';
 
 export type RagNoDataReason =
 	| 'EMPTY_QUESTION'
+	| 'OUT_OF_SCOPE_METRIC'
 	| 'NO_RELEVANT_TABLES'
 	| 'INVALID_OR_UNSAFE_SQL'
 	| 'EMPTY_RESULT_SET'
@@ -206,6 +212,25 @@ export class ChatRagService {
 				t.tableName.trim().toLowerCase(),
 			);
 
+			// Camada 1 (Blindagem Akita - Fail-Fast): Guardrail Determinístico de Escopo Fechado
+			// Impede que a LLM invente ou confunda "valor_liquido" da nota com "lucro líquido", "margem", "CMV", "contas a pagar" ou "inadimplência"
+			const availableColumns = (pipelineResult.schemaGraph?.allTables ?? []).flatMap((t) =>
+				(t.columns ?? []).map((c) => c.columnName),
+			);
+			const scopeCheck = detectOutOfScopeBusinessMetric(effectiveQuestion, availableColumns);
+			if (scopeCheck.outOfScope) {
+				const fallbackMessage = `${scopeCheck.explanation}\n\nNo momento, você pode consultar indicadores comerciais sincronizados como **Faturamento Bruto e Líquido de Vendas**, **Ticket Médio**, **Devoluções**, **Bonificações**, **Ranking de Clientes**, **Desempenho de Vendedores** e **Mix de Produtos**.`;
+				return {
+					noDataFound: true,
+					reason: 'OUT_OF_SCOPE_METRIC',
+					fallbackMessage,
+					contextPrompt: this.buildDeterministicNoDataPrompt('OUT_OF_SCOPE_METRIC', fallbackMessage),
+					generatedSql: null,
+					rowCount: 0,
+					rows: [],
+				};
+			}
+
 			// Caso a) Não houver tabelas relevantes no dicionário de dados
 			if (allowedTables.length === 0) {
 				const fallbackMessage =
@@ -238,6 +263,15 @@ export class ChatRagService {
 			// 3. Extrai o SQL gerado e remove ";" opcional no final
 			const sqlMatch = rawSql.match(/```(?:sql)?\s*([\s\S]*?)\s*```/i);
 			let sql = (sqlMatch ? sqlMatch[1] : rawSql).trim().replace(/;\s*$/, '');
+
+			// 3.1. Camada 3 (Blindagem Akita): Validador e Auto-Sanitizador Determinístico de AST/SQL Pré-Execução
+			const astSanitized = sanitizeAndValidateGeneratedSql(sql, effectiveQuestion);
+			if (astSanitized.wasModified) {
+				console.info(
+					`[ChatRagService] Auto-Sanitizador AST aplicou correções determinísticas:\n- ${astSanitized.appliedFixes.join('\n- ')}`,
+				);
+				sql = astSanitized.sql;
+			}
 
 			// 4. Validação de segurança: apenas queries de leitura (SELECT / WITH ... SELECT) em tabelas autorizadas
 			if (!this.isReadOnlyQuery(sql, allowedTables)) {
@@ -284,6 +318,11 @@ export class ChatRagService {
 				const repairedMatch = repairedRaw.match(/```(?:sql)?\s*([\s\S]*?)\s*```/i);
 				let repairedSql = (repairedMatch ? repairedMatch[1] : repairedRaw).trim().replace(/;\s*$/, '');
 
+				const repairedAst = sanitizeAndValidateGeneratedSql(repairedSql, effectiveQuestion);
+				if (repairedAst.wasModified) {
+					repairedSql = repairedAst.sql;
+				}
+
 				if (!this.isReadOnlyQuery(repairedSql, allowedTables)) {
 					throw dbExecErr;
 				}
@@ -329,6 +368,8 @@ export class ChatRagService {
 				2,
 			);
 
+			const deterministicMathBlock = this.buildDeterministicMathSummary(sanitizedRows);
+
 			const contextPrompt = `
 ### DADOS REAIS DO BANCO DE DADOS DA EMPRESA (POSTGRESQL - SANITIZADO LGPD):
 Status do Grounding: DADOS_ENCONTRADOS (noDataFound: false)
@@ -336,7 +377,7 @@ Resultado retornado (${sanitizedRows.length} registro(s)):
 \`\`\`json
 ${serializedRows}
 \`\`\`
-
+${deterministicMathBlock}
 DIRETRIZES OBRIGATÓRIAS DE COMUNICAÇÃO, GROUNDING ESTRITO E LGPD:
 - REGRA INVIOLÁVEL DE GROUNDING: Responda à pergunta do usuário baseando-se EXCLUSIVAMENTE e OBRIGATORIAMENTE nos dados reais acima. NUNCA invente, estime, extrapole ou alucine nomes de clientes, valores financeiros, quantidades, códigos ou datas que não estejam no JSON acima.
 - PROTEÇÃO LGPD: Dados pessoais sensíveis (como CPF, e-mail, telefone ou credenciais) foram mascarados com \`*\` ou \`[REDACTED_LGPD]\` em conformidade com a LGPD. Preserve o mascaramento e nunca tente deduzir os dados originais.
@@ -638,6 +679,62 @@ REGRAS ESTRITAS DO JSON:
 	 */
 	public sanitizeRowsForLgpd(rows: Record<string, unknown>[]): Record<string, unknown>[] {
 		return sanitizeRowsForLgpd(rows);
+	}
+
+	/**
+	 * Camada 4 (Blindagem Akita): Calcula somas, médias (ticket médio), mínimos, máximos
+	 * e participação percentual (%) pela CPU (Node.js) para que a LLM nunca faça contas de cabeça.
+	 */
+	public buildDeterministicMathSummary(rows: Record<string, unknown>[]): string {
+		if (!Array.isArray(rows) || rows.length === 0) {
+			return '';
+		}
+
+		const sampleKeys = Object.keys(rows[0] ?? {});
+		const summaryEntries: Record<
+			string,
+			{
+				soma_total: number;
+				media_aritmetica: number;
+				minimo: number;
+				maximo: number;
+				quantidade_registros: number;
+			}
+		> = {};
+
+		for (const key of sampleKeys) {
+			if (/^(id|cod|codigo|código|num|nro|numero|número|nota|pedido|cpf|cnpj|cep|ano|telefone|dia|mes|data)/i.test(key)) {
+				continue;
+			}
+
+			const numericValues: number[] = [];
+			for (const row of rows) {
+				const parsed = parseNumericValue(row[key]);
+				if (parsed !== null) {
+					numericValues.push(parsed);
+				}
+			}
+
+			if (numericValues.length > 0 && numericValues.length >= rows.length * 0.5) {
+				const sum = Number(numericValues.reduce((acc, v) => acc + v, 0).toFixed(2));
+				const min = Math.min(...numericValues);
+				const max = Math.max(...numericValues);
+				const avg = Number((sum / numericValues.length).toFixed(2));
+				summaryEntries[key] = {
+					soma_total: sum,
+					media_aritmetica: avg,
+					minimo: min,
+					maximo: max,
+					quantidade_registros: numericValues.length,
+				};
+			}
+		}
+
+		if (Object.keys(summaryEntries).length === 0) {
+			return '';
+		}
+
+		return `\n### ESTATÍSTICAS MATEMÁTICAS DETERMINÍSTICAS (PRÉ-CALCULADAS PELA CPU - NÃO RECALCULE DE CABEÇA):\n\`\`\`json\n${JSON.stringify(summaryEntries, null, 2)}\n\`\`\`\nUse OBRIGATORIAMENTE os valores de \`soma_total\`, \`media_aritmetica\`, \`minimo\` e \`maximo\` acima ao citar totais ou médias no texto.\n`;
 	}
 
 	/**

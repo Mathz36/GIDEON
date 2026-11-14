@@ -108,6 +108,95 @@ export class ResponseReviewerService {
 	}
 
 	/**
+	 * Camada 4 (Blindagem Akita): Reconcilia e sanitiza deterministicamente os blocos ```dashboard
+	 * gerados pela LLM pela CPU (Node.js) com latência 0ms:
+	 * 1. Converte strings numéricas formatadas (ex: "R$ 12.500,50", "1.200,00") em números puros (`number`) via `parseNumericValue`.
+	 * 2. Converte automaticamente gráficos `"pie"` com > 6 categorias em `"horizontal-bar"` para respeitar a Matriz Heurística.
+	 * 3. Garante que todo item de gráfico possua as chaves canônicas `name` e `value`.
+	 */
+	public reconcileAndSanitizeDashboardBlocks(
+		draftResponse: string,
+		rows: Record<string, unknown>[] = [],
+	): string {
+		if (!draftResponse || !/```dashboard/i.test(draftResponse)) {
+			return draftResponse;
+		}
+
+		const chartTypes = new Set(['bar', 'horizontal-bar', 'line', 'area', 'pie']);
+
+		return draftResponse.replace(/```dashboard\s*([\s\S]*?)\s*```/gi, (fullBlock, rawJson: string) => {
+			try {
+				const parsed = JSON.parse(rawJson.trim()) as {
+					type?: string;
+					title?: string;
+					data?: Array<Record<string, unknown>>;
+				};
+
+				if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.data)) {
+					return fullBlock;
+				}
+
+				let normalizedType = String(parsed.type || 'bar').toLowerCase().trim();
+
+				// Regra Heurística Determinística: "pie" com mais de 6 fatias é convertido automaticamente para "horizontal-bar"
+				if (normalizedType === 'pie' && parsed.data.length > 6) {
+					normalizedType = 'horizontal-bar';
+				}
+				parsed.type = normalizedType;
+
+				if (chartTypes.has(normalizedType)) {
+					parsed.data = parsed.data.map((item, idx) => {
+						if (!item || typeof item !== 'object') {
+							return item;
+						}
+
+						const clone: Record<string, unknown> = { ...item };
+
+						// Garante chave 'name' legível
+						if (clone.name === undefined || clone.name === null || String(clone.name).trim() === '') {
+							const fallbackLabelKey = Object.keys(clone).find((k) =>
+								/^(label|categoria|cliente|razaosocial|nome|produto|descricao|vendedor|representante|dia|mes|periodo)/i.test(k),
+							);
+							if (fallbackLabelKey && clone[fallbackLabelKey] !== undefined) {
+								clone.name = String(clone[fallbackLabelKey]);
+							} else if (rows[idx]) {
+								const firstRowVal = Object.values(rows[idx])[0];
+								if (firstRowVal !== undefined) {
+									clone.name = String(firstRowVal);
+								}
+							}
+						}
+
+						// Sanitiza chave 'value' para número puro float/int (nunca string "R$ 1.234,56")
+						if (typeof clone.value !== 'number') {
+							const parsedVal = parseNumericValue(clone.value);
+							if (parsedVal !== null) {
+								clone.value = parsedVal;
+							} else {
+								// Procura outra propriedade numérica no item
+								for (const [k, v] of Object.entries(clone)) {
+									if (k === 'name') continue;
+									const candidate = parseNumericValue(v);
+									if (candidate !== null) {
+										clone.value = candidate;
+										break;
+									}
+								}
+							}
+						}
+
+						return clone;
+					});
+				}
+
+				return `\`\`\`dashboard\n${JSON.stringify(parsed, null, 2)}\n\`\`\``;
+			} catch {
+				return fullBlock;
+			}
+		});
+	}
+
+	/**
 	 * Etapa 1 do Revisor: Inspeção Heurística e Determinística Instantânea (Latência 0ms).
 	 * Verifica vazamento de SQL, placeholders de exemplos, JSON de gráfico inválido ou invenção de números quando noDataFound=true.
 	 */
@@ -405,6 +494,18 @@ Veredito JSON da auditoria:`;
 		const { userQuestion, history, systemPrompt, ragResult, parameters, onStatusUpdate } = params;
 		const verdicts: ReviewVerdict[] = [];
 
+		// Camada 1 (Fail-Fast): Se a métrica pedida está fora do escopo contábil/financeiro sincronizado,
+		// retorna imediatamente a explicação determinística sem invocar a LLM geradora.
+		if (ragResult.noDataFound && ragResult.reason === 'OUT_OF_SCOPE_METRIC') {
+			return {
+				finalResponse: this.buildDeterministicFallbackResponse(userQuestion, ragResult),
+				attempts: 1,
+				wasCorrected: false,
+				usedDeterministicFallback: true,
+				verdicts: [{ approved: true, stage: 'DETERMINISTIC_GUARDRAIL' }],
+			};
+		}
+
 		// Se a consulta pediu dados de negócio mas o banco não retornou nada (noDataFound: true)
 		// e NÃO é uma saudação pura, já injetamos um lembrete severo ou verificamos com rigor absoluto.
 		const aggregates = !ragResult.noDataFound ? this.computeDeterministicAggregates(ragResult.rows) : {};
@@ -445,6 +546,11 @@ Veredito JSON da auditoria:`;
 					typeof this.gemini.generateChatResponse === 'function'
 						? await this.gemini.generateChatResponse(workingHistory, enrichedSystemPrompt, attemptParams)
 						: await (this.gemini as any).generateText(workingHistory, enrichedSystemPrompt, attemptParams);
+
+				// Camada 4: Reconcilia e sanitiza deterministicamente qualquer bloco ```dashboard antes da auditoria
+				if (!ragResult.noDataFound) {
+					currentDraft = this.reconcileAndSanitizeDashboardBlocks(currentDraft, ragResult.rows);
+				}
 			} catch (genErr) {
 				console.warn(`[ResponseReviewerService] Erro na tentativa #${attempt} de geração:`, genErr);
 				if (attempt === maxAttempts) {
