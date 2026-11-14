@@ -302,45 +302,57 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		}
 	};
 
-	const handleMouseMoveCanvas = (e: ReactMouseEvent<HTMLDivElement>) => {
-		if (isPanning) {
-			setCamera((prev) => ({
-				...prev,
-				x: e.clientX - panStart.x,
-				y: e.clientY - panStart.y,
-			}));
-		} else if (draggingNode) {
-			const distMoved = Math.hypot(e.clientX - startMousePosRef.current.x, e.clientY - startMousePosRef.current.y);
-			if (distMoved > 3) {
-				hasMovedRef.current = true;
-			}
+	// Listeners globais no window durante drag/pan para movimentação suave e sem atraso
+	useEffect(() => {
+		if (!draggingNode && !isPanning) return;
 
-			const newX = (e.clientX - camera.x) / camera.zoom - draggingNode.offsetX;
-			const newY = (e.clientY - camera.y) / camera.zoom - draggingNode.offsetY;
+		const handleGlobalMouseMove = (e: MouseEvent) => {
+			if (isPanning) {
+				setCamera((prev) => ({
+					...prev,
+					x: e.clientX - panStart.x,
+					y: e.clientY - panStart.y,
+				}));
+			} else if (draggingNode) {
+				const distMoved = Math.hypot(e.clientX - startMousePosRef.current.x, e.clientY - startMousePosRef.current.y);
+				if (distMoved > 3) {
+					hasMovedRef.current = true;
+				}
 
-			setPositions((prev) => {
-				const next = {
+				const newX = (e.clientX - camera.x) / camera.zoom - draggingNode.offsetX;
+				const newY = (e.clientY - camera.y) / camera.zoom - draggingNode.offsetY;
+
+				setPositions((prev) => ({
 					...prev,
 					[draggingNode.tableName]: { x: Math.round(newX), y: Math.round(newY) },
-				};
-				return next;
-			});
-		}
-	};
-
-	const handleMouseUpCanvas = () => {
-		if (isPanning) {
-			setIsPanning(false);
-		}
-		if (draggingNode) {
-			if (hasMovedRef.current) {
-				// Salva organização sempre que uma tabela for reposicionada
-				void persistPositions(positions);
+				}));
 			}
-			setDraggingNode(null);
-			hasMovedRef.current = false;
-		}
-	};
+		};
+
+		const handleGlobalMouseUp = () => {
+			if (isPanning) {
+				setIsPanning(false);
+			}
+			if (draggingNode) {
+				if (hasMovedRef.current) {
+					setPositions((latest) => {
+						void persistPositions(latest);
+						return latest;
+					});
+				}
+				setDraggingNode(null);
+				hasMovedRef.current = false;
+			}
+		};
+
+		window.addEventListener('mousemove', handleGlobalMouseMove);
+		window.addEventListener('mouseup', handleGlobalMouseUp);
+
+		return () => {
+			window.removeEventListener('mousemove', handleGlobalMouseMove);
+			window.removeEventListener('mouseup', handleGlobalMouseUp);
+		};
+	}, [draggingNode, isPanning, camera, panStart, persistPositions]);
 
 	const handleWheelCanvas = (e: ReactWheelEvent<HTMLDivElement>) => {
 		e.preventDefault();
@@ -807,8 +819,6 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 			<div
 				ref={containerRef}
 				onMouseDown={handleMouseDownCanvas}
-				onMouseMove={handleMouseMoveCanvas}
-				onMouseUp={handleMouseUpCanvas}
 				onWheel={handleWheelCanvas}
 				className={`relative w-full overflow-hidden select-none cursor-grab active:cursor-grabbing bg-slate-50/70 ${
 					isFullscreen ? 'h-[calc(100vh-65px)]' : 'h-[750px]'
@@ -865,7 +875,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 					</defs>
 
 					{edges.map((edge) => (
-						<g key={edge.id} className="transition-all duration-150">
+						<g key={edge.id} className="pointer-events-none">
 							{/* Linha de conexão cúbica */}
 							<path
 								d={edge.path}
@@ -874,7 +884,6 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 								strokeWidth={edge.isHighlighted ? 2.75 : 1.75}
 								strokeDasharray={edge.isHighlighted ? 'none' : '4 3'}
 								markerEnd={edge.isHighlighted ? 'url(#arrow-light-active)' : 'url(#arrow-light-default)'}
-								className="transition-colors duration-200"
 							/>
 							{/* Bolinha na porta de origem */}
 							<circle
@@ -906,28 +915,36 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 							table.columns.some((c) => c.columnName.toLowerCase().includes(searchQuery.toLowerCase()))
 						);
 
+						const isDraggingThis = draggingNode?.tableName === tName;
+
 						return (
 							<div
 								key={table.tableName}
 								style={{
 									transform: `translate3d(${pos.x}px, ${pos.y}px, 0)`,
 									width: `${NODE_WIDTH}px`,
+									zIndex: isDraggingThis ? 30 : isThisSelected || isThisHovered ? 20 : 10,
 								}}
 								onMouseEnter={() => setHoveredTable(tName)}
 								onMouseLeave={() => setHoveredTable(null)}
 								onMouseDown={(e) => handleStartDragNode(e, table.tableName)}
 								onDoubleClick={() => handleOpenTableModal(table)}
 								title="1 clique e segure para arrastar • 2 cliques para editar"
-								className={`pointer-events-auto absolute rounded-xl border bg-white text-slate-800 shadow-sm transition-all duration-150 cursor-grab active:cursor-grabbing select-none group ${
-									isThisSelected || isThisHovered
+								className={`pointer-events-auto absolute rounded-xl border bg-white text-slate-800 shadow-sm transition-[border-color,box-shadow] duration-150 cursor-grab active:cursor-grabbing select-none group ${
+									isDraggingThis
+										? 'border-indigo-600 shadow-2xl ring-2 ring-indigo-500/30 cursor-grabbing'
+										: isThisSelected || isThisHovered
 										? 'border-indigo-500 shadow-xl shadow-indigo-100 ring-2 ring-indigo-500/20'
 										: isSearchMatch
 										? 'border-amber-400 shadow-md ring-2 ring-amber-400/20'
 										: 'border-slate-200 hover:border-slate-300 hover:shadow-md'
 								}`}
 							>
-								{/* Header do Card */}
-								<div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/90 px-3 py-2 rounded-t-xl">
+								{/* Header do Card com altura exata HEADER_HEIGHT */}
+								<div
+									style={{ height: `${HEADER_HEIGHT}px` }}
+									className="flex items-center justify-between border-b border-slate-200 bg-slate-50/90 px-3 rounded-t-xl"
+								>
 									<div className="flex items-center gap-2 overflow-hidden">
 										<TableIcon className="h-4 w-4 text-indigo-600 shrink-0" />
 										<span className="font-mono text-xs font-bold text-slate-900 truncate" title={table.tableName}>

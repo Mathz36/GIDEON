@@ -501,3 +501,20 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/src/routes/api.ts`
   - `frontend/src/components/erp/SchemaDiagramExplorer.tsx`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Sincronismo Físico Frame a Frame de Tabelas e Arestas FK (Eliminação do Delay CSS)
+- **Agentes Responsáveis:** `frontend`, `planner`
+- **Tipo:** `fix` / `perf`
+- **Contexto & Motivação:**
+  O usuário reportou que ao mover uma tabela de um local para outro no diagrama, as setas de ligação FK se moviam primeiro que a tabela física (as setas chegavam antes e a tabela ficava atrasada atrás das setas).
+- **Causa Raiz & Solução:**
+  - **Causa:** A `div` do nó da tabela possuía `transition-all duration-150` no Tailwind, fazendo com que qualquer alteração em `transform: translate3d(...)` sofresse uma interpolação/atraso de 150ms no CSS. O SVG, por outro lado, atualizava suas coordenadas matemáticas `(x, y)` instantaneamente no React a cada evento de mouse (0ms). Isso criava uma discrepância visual de 150ms onde a seta se movia no frame atual e a tabela "corria atrás".
+  - **Correção:**
+    1. Removido `transition-all duration-150` de `transform` nas tabelas e no grupo SVG, mantendo transições suaves apenas em cores e sombras (`transition-[border-color,box-shadow]`).
+    2. Adicionada classe `transition-none` e elevação de `z-index: 30` no nó que está sendo arrastado no momento (`isDraggingThis`).
+    3. Fixada a altura exata do cabeçalho da tabela em `HEADER_HEIGHT = 44px` para correspondência milimétrica com o centro das linhas de cada coluna.
+    4. Implementados listeners globais no `window` (`mousemove` e `mouseup`) com limpeza no unmount, garantindo arraste 60fps sem engasgos ou descompasso mesmo em movimentos rápidos do cursor.
+- **Arquivos Impactados:**
+  - `frontend/src/components/erp/SchemaDiagramExplorer.tsx`
+  - `MEMORY_PALACE.md`
