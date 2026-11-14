@@ -609,3 +609,26 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/pages/Chat.tsx`
   - `backend/src/__tests__/chat-history-memory.test.ts`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Oferta Automática e Envio de Gráficos do Chat para o "Seu Dashboard" Mantendo o Mesmo Layout
+- **Agentes Responsáveis:** `planner`, `backend`, `frontend`, `tester`
+- **Tipo:** `feat` / `test`
+- **Contexto & Motivação:**
+  O usuário solicitou que, sempre que a Gideon gerar um gráfico no Chat, ela pergunte ao usuário se ele deseja salvar esse gráfico no **Seu Dashboard** como um indicador; caso o usuário responda **"Sim"** (seja digitando no chat ou clicando na confirmação), o gráfico é enviado diretamente para o seu Dashboard mantendo exatamente o mesmo layout (`type`, `title`, `data`, `colSpan` e `sqlQuery`).
+- **Implementações Realizadas:**
+  1. **Pergunta Automática e Confirmação Conversacional (`user-dashboard.service.ts` & `api.ts`):**
+     - `appendSaveToDashboardQuestionIfChartPresent` detecta quando a resposta do chat contém um bloco ````dashboard```` e adiciona ao final da mensagem a pergunta oferecendo salvar o gráfico no **Seu Dashboard**.
+     - `recordLastChatChart` memoriza na sessão do usuário o gráfico recém-gerado (`title`, `type`, `data`) junto com a `sqlQuery` e o `queryPrompt` originais.
+     - `isSaveChartToDashboardConfirmation` identifica respostas afirmativas do usuário no chat (*"Sim"*, *"Quero"*, *"Pode salvar"*, *"Salva no meu dashboard"*) sem confundi-las com novas perguntas analíticas.
+     - Em `POST /api/chat`, quando o usuário responde **"Sim"** após a geração de um gráfico, o backend cria imediatamente o widget no `UserDashboard` com o mesmo layout, emite o evento SSE `event: dashboard_saved` e responde confirmando o envio sem desperdiçar chamadas SQL/LLM.
+  2. **Barra de Confirmação Interativa no Card do Gráfico (`DynamicDashboard.tsx` & `useChat.ts`):**
+     - Todo gráfico renderizado no Chat exibe em seu rodapé a pergunta **"Deseja salvar este gráfico no Seu Dashboard como um indicador?"** com os botões **"Sim, salvar no meu Dashboard"** e **"Agora não"**.
+     - `syncSavedWidgetToLocalDashboardCache` sincroniza instantaneamente o indicador salvo tanto no PostgreSQL (`dashboard_widgets`) quanto no cache local da tela **Seu Dashboard**, seja via clique no botão ou via resposta **"Sim"** digitada no chat.
+- **Arquivos Impactados:**
+  - `backend/src/services/user-dashboard.service.ts`
+  - `backend/src/routes/api.ts`
+  - `frontend/src/components/chat/DynamicDashboard.tsx`
+  - `frontend/src/hooks/useChat.ts`
+  - `backend/src/__tests__/user-dashboard.service.test.ts`
+  - `MEMORY_PALACE.md`

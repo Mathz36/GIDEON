@@ -12,7 +12,11 @@ import { requireAuth, requireAdmin, AuthenticatedRequest } from '../middlewares/
 import prismaClient from '../config/prisma';
 import erpSyncScheduler from '../services/erp-sync.scheduler';
 import syncQueueManager from '../services/sync-queue.manager';
-import userDashboardService from '../services/user-dashboard.service';
+import userDashboardService, {
+	appendSaveToDashboardQuestionIfChartPresent,
+	extractLastDashboardBlockFromText,
+	isSaveChartToDashboardConfirmation,
+} from '../services/user-dashboard.service';
 import chatHistoryMemoryService, { MemoryCategory } from '../services/chat-history-memory.service';
 import { autoDetectRelationshipsUseCase } from '../modules/data-dictionary';
 
@@ -489,6 +493,93 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 			}
 		}
 
+		// Verifica se o usuário está respondendo "Sim" para salvar no seu Dashboard o último gráfico gerado no chat
+		if (userId && lastUserMessage && isSaveChartToDashboardConfirmation(lastUserMessage)) {
+			const previousModelMessages = rawHistory.filter((m) => m.role === 'model');
+			const lastModelText =
+				previousModelMessages.length > 0
+					? previousModelMessages[previousModelMessages.length - 1].parts.map((p) => p.text).join('\n')
+					: '';
+			const previousUserMessages = rawHistory.filter((m) => m.role === 'user');
+			const previousUserPrompt =
+				previousUserMessages.length >= 2
+					? previousUserMessages[previousUserMessages.length - 2].parts.map((p) => p.text).join(' ')
+					: '';
+
+			const chartFromHistory = extractLastDashboardBlockFromText(lastModelText);
+			const chartFromSession = userDashboardService.getLastChatChart(userId);
+			const pendingChart = chartFromHistory ?? chartFromSession;
+
+			if (
+				pendingChart &&
+				(chartFromHistory !== null || /\b(dashboard|painel|indicador|gr[áa]fico)\b/i.test(lastUserMessage))
+			) {
+				emitStatus(
+					2,
+					'Salvando gráfico no Seu Dashboard...',
+					'Enviando indicador com o mesmo layout e dados',
+				);
+
+				const createdWidget = await userDashboardService.createWidget(userId, {
+					title: pendingChart.title,
+					type: pendingChart.type,
+					data: pendingChart.data,
+					sqlQuery: chartFromSession?.sqlQuery ?? null,
+					queryPrompt:
+						previousUserPrompt || chartFromSession?.queryPrompt || pendingChart.title,
+				});
+
+				if (!res.writableEnded && !res.closed) {
+					res.write(
+						`event: dashboard_saved\ndata: ${JSON.stringify({ widget: createdWidget })}\n\n`,
+					);
+				}
+
+				const layoutNames: Record<string, string> = {
+					bar: 'Gráfico de Barras Verticais',
+					'horizontal-bar': 'Ranking em Barras Horizontais',
+					line: 'Gráfico de Linha (Série Temporal)',
+					area: 'Gráfico de Área',
+					pie: 'Gráfico de Pizza',
+					table: 'Tabela Analítica',
+				};
+				const layoutDesc = layoutNames[pendingChart.type] || pendingChart.type;
+
+				const confirmationText = `✅ Perfeito! Enviei o gráfico **"${pendingChart.title}"** para o **Seu Dashboard** como um indicador mantendo exatamente o mesmo layout (**${layoutDesc}**).\n\nVocê já pode acompanhá-lo, redimensioná-lo ou atualizá-lo a qualquer momento acessando a aba **Seu Dashboard** no menu superior!`;
+
+				if (activeConversationId) {
+					try {
+						const savedExchange = await chatHistoryMemoryService.appendExchangeAndCompactIfNeeded({
+							userId,
+							conversationId: activeConversationId,
+							userMessage: lastUserMessage,
+							assistantMessage: confirmationText,
+						});
+						if (!res.writableEnded && !res.closed) {
+							res.write(
+								`event: conversation\ndata: ${JSON.stringify({
+									conversationId: activeConversationId,
+									title: savedExchange.title,
+									wasCompacted: savedExchange.wasCompacted,
+									evictedConversationIds,
+									newMemoriesSavedCount,
+								})}\n\n`,
+							);
+						}
+					} catch (persistErr) {
+						console.warn('[ChatRoute] Aviso ao salvar confirmação de dashboard na conversa:', persistErr);
+					}
+				}
+
+				if (!res.writableEnded && !res.closed) {
+					res.write(`data: ${JSON.stringify({ text: confirmationText })}\n\n`);
+					res.write('event: done\ndata: {}\n\n');
+					res.end();
+				}
+				return;
+			}
+		}
+
 		// Carrega as configurações da IA e as integrações cadastradas do banco de dados
 		const aiConfig = await aiConfigurationService.get();
 		const erpIntegrations = await erpConfigurationService.list();
@@ -573,7 +664,18 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 			onStatusUpdate: (st) => emitStatus(st.step, st.title, st.subtitle),
 		});
 
-		const validatedText = reviewOutcome.finalResponse;
+		const generatedChart = extractLastDashboardBlockFromText(reviewOutcome.finalResponse);
+		if (userId && generatedChart) {
+			userDashboardService.recordLastChatChart(userId, {
+				title: generatedChart.title,
+				type: generatedChart.type,
+				data: generatedChart.data,
+				sqlQuery: ragResult.generatedSql,
+				queryPrompt: lastUserMessage,
+			});
+		}
+
+		const validatedText = appendSaveToDashboardQuestionIfChartPresent(reviewOutcome.finalResponse);
 
 		// Persiste o turno na conversa do usuário e executa compactação automática se atingir o limite (16 msgs / 12k chars)
 		if (userId && activeConversationId && lastUserMessage) {

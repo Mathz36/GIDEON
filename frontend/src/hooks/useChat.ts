@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { syncSavedWidgetToLocalDashboardCache } from '../components/chat/DynamicDashboard';
 
 export interface ChatMessage {
 	id: string;
@@ -42,6 +43,7 @@ interface GeminiStreamPayload {
 	wasCompacted?: unknown;
 	evictedConversationIds?: unknown;
 	newMemoriesSavedCount?: unknown;
+	widget?: unknown;
 }
 
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -437,6 +439,16 @@ export function useChat() {
 								title: payload.title,
 								subtitle: typeof payload.subtitle === 'string' ? payload.subtitle : '',
 							});
+							continue;
+						}
+
+						if (eventName === 'dashboard_saved' && payload.widget && typeof payload.widget === 'object') {
+							syncSavedWidgetToLocalDashboardCache(payload.widget as any);
+							window.dispatchEvent(
+								new CustomEvent('gideon:dashboard-widget-saved', {
+									detail: payload.widget,
+								})
+							);
 							continue;
 						}
 

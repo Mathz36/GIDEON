@@ -61,11 +61,207 @@ const VALID_WIDGET_TYPES: ReadonlySet<WidgetType> = new Set([
 	'table',
 ]);
 
+export interface LastChatChartContext {
+	title: string;
+	type: WidgetType;
+	data: unknown[];
+	sqlQuery?: string | null;
+	queryPrompt?: string;
+	createdAt: number;
+}
+
+/**
+ * Extrai o último bloco ```dashboard válido do texto de resposta da Gideon,
+ * mantendo exatamente o mesmo tipo de gráfico (layout), título e dados.
+ */
+export function extractLastDashboardBlockFromText(text: string): {
+	type: WidgetType;
+	title: string;
+	data: unknown[];
+} | null {
+	if (!text || typeof text !== 'string') {
+		return null;
+	}
+
+	const regex = /```dashboard\s*([\s\S]*?)\s*```/gi;
+	let match: RegExpExecArray | null;
+	let lastValid: { type: WidgetType; title: string; data: unknown[] } | null = null;
+
+	while ((match = regex.exec(text)) !== null) {
+		const rawJson = match[1]?.trim();
+		if (!rawJson) continue;
+
+		const firstBrace = rawJson.indexOf('{');
+		const lastBrace = rawJson.lastIndexOf('}');
+		if (firstBrace === -1 || lastBrace <= firstBrace) continue;
+
+		try {
+			const parsed = JSON.parse(rawJson.slice(firstBrace, lastBrace + 1)) as {
+				type?: unknown;
+				title?: unknown;
+				data?: unknown;
+			};
+			if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.data) || parsed.data.length === 0) {
+				continue;
+			}
+			const rawType = typeof parsed.type === 'string' ? (parsed.type.trim().toLowerCase() as WidgetType) : 'table';
+			const validType: WidgetType = VALID_WIDGET_TYPES.has(rawType) ? rawType : 'table';
+			const title =
+				typeof parsed.title === 'string' && parsed.title.trim()
+					? parsed.title.trim()
+					: 'Indicador Sankhya ERP';
+
+			lastValid = {
+				type: validType,
+				title,
+				data: parsed.data,
+			};
+		} catch {
+			// Ignora bloco malformado
+		}
+	}
+
+	return lastValid;
+}
+
+/**
+ * Verifica se a mensagem do usuário no chat é uma confirmação ("Sim", "Quero", "Pode salvar no dashboard")
+ * para enviar o gráfico recém-gerado pela Gideon ao seu Dashboard como um indicador.
+ */
+export function isSaveChartToDashboardConfirmation(userMessage: string): boolean {
+	if (!userMessage || typeof userMessage !== 'string') {
+		return false;
+	}
+
+	const normalized = userMessage
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase()
+		.replace(/[?!.;,]+/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+
+	if (!normalized) {
+		return false;
+	}
+
+	// 1. Menções explícitas a salvar/enviar o gráfico ou indicador para o dashboard
+	if (
+		/\b(salv(?:ar|e|a)|envi(?:ar|e|a)|mand(?:ar|e|a)|coloc(?:ar|a)|adicion(?:ar|e|a)|fix(?:ar|e|a))\b.*\b(dashboard|painel|indicador|grafico)\b/.test(
+			normalized,
+		) ||
+		/\b(quero|pode|gostaria de)\s+(salvar|enviar|colocar|adicionar|fixar)\b/.test(normalized)
+	) {
+		return true;
+	}
+
+	// 2. Respostas afirmativas curtas diretas ("sim", "quero", "pode salvar", "sim por favor", "claro")
+	const words = normalized.split(' ').filter(Boolean);
+	if (words.length <= 6) {
+		// Se tiver termos de uma nova pergunta de negócio (ex: "sim mas qual o faturamento de outubro"), não trata apenas como confirmação
+		const hasNewAnalyticalQuestion =
+			/\b(faturamento|vendas?|clientes?|produtos?|estoque|notas?|pedidos?|vendedor|representante|gerente|qual|quais|quanto|como|onde|mostre|liste|gere|compar)\b/.test(
+				normalized,
+			);
+		if (hasNewAnalyticalQuestion) {
+			return false;
+		}
+
+		const affirmativePattern =
+			/^(sim|s|quero|quero sim|sim quero|pode|pode sim|sim pode|pode salvar|salva|salvar|claro|com certeza|ok|beleza|isso|por favor|sim por favor|envia|manda|positivo)$/;
+		if (affirmativePattern.test(normalized)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Quando a resposta da Gideon contém um bloco ```dashboard (gráfico/tabela),
+ * adiciona ao final da mensagem a pergunta oferecendo salvar o gráfico no Dashboard do usuário.
+ */
+export function appendSaveToDashboardQuestionIfChartPresent(responseText: string): string {
+	const chart = extractLastDashboardBlockFromText(responseText);
+	if (!chart) {
+		return responseText;
+	}
+
+	// Evita duplicar se a pergunta já estiver presente no texto
+	if (/salvar\s+este\s+gr[áa]fico\s+no\s+seu\s+dashboard/i.test(responseText)) {
+		return responseText;
+	}
+
+	return `${responseText.trim()}\n\n---\n📊 **Deseja salvar este gráfico no seu Dashboard como um indicador?** *(Se disser **"Sim"**, envio este gráfico para o **Seu Dashboard** mantendo exatamente o mesmo layout).*`;
+}
+
 export class UserDashboardService {
 	private readonly gemini: GeminiService;
+	private schemaInitialized = false;
+	private readonly lastChartByUser = new Map<string, LastChatChartContext>();
 
 	constructor(gemini: GeminiService = new GeminiService()) {
 		this.gemini = gemini;
+	}
+
+	public recordLastChatChart(
+		userId: string,
+		context: Omit<LastChatChartContext, 'createdAt'>,
+	): void {
+		if (!userId) return;
+		this.lastChartByUser.set(userId, {
+			...context,
+			createdAt: Date.now(),
+		});
+	}
+
+	public getLastChatChart(userId: string): LastChatChartContext | null {
+		if (!userId) return null;
+		return this.lastChartByUser.get(userId) ?? null;
+	}
+
+	public async ensureSchemaInitialized(): Promise<void> {
+		if (this.schemaInitialized) {
+			return;
+		}
+		if (typeof (prismaClient as any).$executeRawUnsafe !== 'function') {
+			this.schemaInitialized = true;
+			return;
+		}
+		try {
+			await prismaClient.$executeRawUnsafe(`
+				CREATE TABLE IF NOT EXISTS "user_dashboards" (
+					"id" TEXT NOT NULL,
+					"user_id" TEXT NOT NULL,
+					"title" TEXT NOT NULL DEFAULT 'Meu Dashboard',
+					"created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					"updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					CONSTRAINT "user_dashboards_pkey" PRIMARY KEY ("id"),
+					CONSTRAINT "user_dashboards_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "usuarios"("id") ON DELETE CASCADE ON UPDATE CASCADE
+				);
+			`);
+			await prismaClient.$executeRawUnsafe(`
+				CREATE TABLE IF NOT EXISTS "dashboard_widgets" (
+					"id" TEXT NOT NULL,
+					"dashboard_id" TEXT NOT NULL,
+					"title" TEXT NOT NULL,
+					"type" TEXT NOT NULL,
+					"queryPrompt" TEXT NOT NULL,
+					"sqlQuery" TEXT,
+					"cachedData" JSONB,
+					"col_span" INTEGER NOT NULL DEFAULT 1,
+					"row_span" INTEGER NOT NULL DEFAULT 1,
+					"order" INTEGER NOT NULL DEFAULT 0,
+					"created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					"updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					CONSTRAINT "dashboard_widgets_pkey" PRIMARY KEY ("id"),
+					CONSTRAINT "dashboard_widgets_dashboard_id_fkey" FOREIGN KEY ("dashboard_id") REFERENCES "user_dashboards"("id") ON DELETE CASCADE ON UPDATE CASCADE
+				);
+			`);
+			this.schemaInitialized = true;
+		} catch (err) {
+			console.warn('[UserDashboardService] Aviso ao inicializar tabelas de dashboard:', err);
+		}
 	}
 
 	/**
@@ -76,6 +272,8 @@ export class UserDashboardService {
 		if (!userId || typeof userId !== 'string') {
 			throw new Error('userId inválido ou não informado.');
 		}
+
+		await this.ensureSchemaInitialized();
 
 		let dashboard = await prismaClient.userDashboard.findFirst({
 			where: { userId },
@@ -175,7 +373,12 @@ export class UserDashboardService {
 		const rawType = input.type?.trim().toLowerCase() as WidgetType;
 		const type: WidgetType = VALID_WIDGET_TYPES.has(rawType) ? rawType : 'table';
 
-		const colSpan = Math.min(3, Math.max(1, typeof input.colSpan === 'number' ? input.colSpan : (type === 'table' ? 2 : 1)));
+		const defaultColSpan =
+			type === 'table' || type === 'line' || type === 'area' || type === 'horizontal-bar' ? 2 : 1;
+		const colSpan = Math.min(
+			3,
+			Math.max(1, typeof input.colSpan === 'number' ? input.colSpan : defaultColSpan),
+		);
 		const rowSpan = Math.min(2, Math.max(1, typeof input.rowSpan === 'number' ? input.rowSpan : 1));
 
 		const maxOrder = dashboard.widgets.reduce((max, w) => Math.max(max, w.order), -1);
@@ -196,13 +399,26 @@ export class UserDashboardService {
 			};
 		}
 
+		// Se veio do chat sem sqlQuery explícito, tenta vincular com a última query SQL gerada na sessão
+		const lastChart = this.getLastChatChart(userId);
+		const resolvedSqlQuery =
+			input.sqlQuery !== undefined
+				? input.sqlQuery
+				: lastChart && lastChart.type === type
+					? lastChart.sqlQuery ?? null
+					: null;
+		const resolvedQueryPrompt =
+			input.queryPrompt?.trim() ||
+			(lastChart && lastChart.type === type ? lastChart.queryPrompt : undefined) ||
+			title;
+
 		const widget = await prismaClient.dashboardWidget.create({
 			data: {
 				dashboardId: dashboard.id,
 				title,
 				type,
-				queryPrompt: input.queryPrompt?.trim() || title,
-				sqlQuery: input.sqlQuery || null,
+				queryPrompt: resolvedQueryPrompt,
+				sqlQuery: resolvedSqlQuery,
 				cachedData: cachedData as unknown as object,
 				colSpan,
 				rowSpan,

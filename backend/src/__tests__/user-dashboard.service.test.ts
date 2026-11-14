@@ -89,12 +89,18 @@ if (!globalForPrisma.prisma) {
 
 describe('UserDashboardService Test Suite', () => {
 	let userDashboardService: any;
+	let extractLastDashboardBlockFromText: any;
+	let appendSaveToDashboardQuestionIfChartPresent: any;
+	let isSaveChartToDashboardConfirmation: any;
 
 	before(async () => {
 		// Importa dinamicamente após inicializar mock do Prisma
 		// eslint-disable-next-line @typescript-eslint/no-require-imports
 		const mod = require('../services/user-dashboard.service');
 		userDashboardService = mod.userDashboardService;
+		extractLastDashboardBlockFromText = mod.extractLastDashboardBlockFromText;
+		appendSaveToDashboardQuestionIfChartPresent = mod.appendSaveToDashboardQuestionIfChartPresent;
+		isSaveChartToDashboardConfirmation = mod.isSaveChartToDashboardConfirmation;
 	});
 
 	it('1. deve obter ou criar dashboard vazio para o usuário', async () => {
@@ -175,5 +181,56 @@ describe('UserDashboardService Test Suite', () => {
 		const widget1 = mockWidgets[0];
 		const res = await userDashboardService.removeWidget('user-uuid-1', widget1.id);
 		assert.deepEqual(res, { success: true });
+	});
+
+	it('8. deve perguntar ao usuário se deseja salvar o gráfico no seu Dashboard quando a resposta do chat contiver um bloco dashboard', () => {
+		const responseWithChart = `Aqui está a evolução do faturamento líquido:\n\n\`\`\`dashboard\n{"type":"area","title":"Evolução Diária de Faturamento Líquido","data":[{"name":"01/10","value":12000},{"name":"02/10","value":18500}]}\n\`\`\``;
+		const enriched = appendSaveToDashboardQuestionIfChartPresent(responseWithChart);
+		assert.ok(enriched.includes('Deseja salvar este gráfico no seu Dashboard como um indicador?'));
+
+		const responseWithoutChart = 'O faturamento líquido total foi de R$ 30.500,00.';
+		assert.equal(appendSaveToDashboardQuestionIfChartPresent(responseWithoutChart), responseWithoutChart);
+	});
+
+	it('9. deve identificar com precisão confirmações do usuário ("sim", "quero", "salva no dashboard") sem confundir com novas perguntas analíticas', () => {
+		assert.equal(isSaveChartToDashboardConfirmation('Sim'), true);
+		assert.equal(isSaveChartToDashboardConfirmation('sim, quero!'), true);
+		assert.equal(isSaveChartToDashboardConfirmation('Pode salvar'), true);
+		assert.equal(isSaveChartToDashboardConfirmation('Salva esse gráfico no meu dashboard'), true);
+		assert.equal(isSaveChartToDashboardConfirmation('Enviar para o dashboard como indicador'), true);
+
+		// Novas perguntas analíticas não devem ser confundidas com confirmação de salvamento
+		assert.equal(isSaveChartToDashboardConfirmation('Qual foi o faturamento líquido de outubro?'), false);
+		assert.equal(isSaveChartToDashboardConfirmation('Sim, mas mostre também as vendas por vendedor'), false);
+	});
+
+	it('10. deve extrair o gráfico do chat e enviá-lo ao Dashboard do usuário preservando o mesmo layout, título, dados e query SQL', async () => {
+		const chatResponse = `Análise concluída:\n\`\`\`dashboard\n{"type":"horizontal-bar","title":"Ranking de Clientes por Venda Líquida","data":[{"name":"Cliente Alfa","value":45000},{"name":"Cliente Beta","value":32000}]}\n\`\`\``;
+		const extracted = extractLastDashboardBlockFromText(chatResponse);
+		assert.ok(extracted);
+		assert.equal(extracted.type, 'horizontal-bar');
+		assert.equal(extracted.title, 'Ranking de Clientes por Venda Líquida');
+		assert.equal(extracted.data.length, 2);
+
+		userDashboardService.recordLastChatChart('user-uuid-1', {
+			title: extracted.title,
+			type: extracted.type,
+			data: extracted.data,
+			sqlQuery: "SELECT cod_cliente AS name, SUM(CAST(valor_liquido AS NUMERIC)) AS value FROM erp_nota_fiscal WHERE operacao = 'VENDAS' GROUP BY cod_cliente",
+			queryPrompt: 'Quais os maiores clientes por venda líquida?',
+		});
+
+		const savedWidget = await userDashboardService.createWidget('user-uuid-1', {
+			title: extracted.title,
+			type: extracted.type,
+			data: extracted.data,
+		});
+
+		assert.equal(savedWidget.title, 'Ranking de Clientes por Venda Líquida');
+		assert.equal(savedWidget.type, 'horizontal-bar');
+		assert.equal(savedWidget.colSpan, 2);
+		assert.equal(savedWidget.data.length, 2);
+		assert.ok(savedWidget.sqlQuery.includes('erp_nota_fiscal'));
+		assert.equal(savedWidget.queryPrompt, 'Quais os maiores clientes por venda líquida?');
 	});
 });

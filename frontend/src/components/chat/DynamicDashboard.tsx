@@ -1,4 +1,4 @@
-import React, { useId, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useState } from 'react';
 import {
 	ResponsiveContainer,
 	BarChart,
@@ -26,6 +26,11 @@ import {
 	LayoutGrid,
 	AlertCircle,
 	ArrowLeftRight,
+	LayoutDashboard,
+	CheckCircle2,
+	Loader2,
+	Plus,
+	X,
 } from 'lucide-react';
 
 export interface DashboardData {
@@ -302,6 +307,65 @@ class SafeChartContainer extends React.Component<
 	}
 }
 
+export function syncSavedWidgetToLocalDashboardCache(widget: {
+	id?: string;
+	title?: string;
+	type?: string;
+	queryPrompt?: string;
+	colSpan?: number;
+	rowSpan?: number;
+	data?: unknown[];
+	cachedData?: { data?: unknown[] } | unknown[];
+	updatedAt?: string;
+}): void {
+	try {
+		const rawUser = localStorage.getItem('gideon.auth.user');
+		const parsedUser = rawUser ? JSON.parse(rawUser) : null;
+		const userId = parsedUser?.id || parsedUser?.email || 'guest';
+		const storageKey = `gideon.dashboard.cards_${userId}`;
+
+		const existingRaw = localStorage.getItem(storageKey);
+		const existingCards: any[] = existingRaw ? JSON.parse(existingRaw) : [];
+
+		const rows = Array.isArray(widget.data)
+			? widget.data
+			: Array.isArray((widget.cachedData as any)?.data)
+				? (widget.cachedData as any).data
+				: Array.isArray(widget.cachedData)
+					? widget.cachedData
+					: [];
+
+		const colSpan = typeof widget.colSpan === 'number' ? widget.colSpan : 2;
+		const size = colSpan === 1 ? 'P' : colSpan === 3 ? 'G' : 'M';
+		const chartType = widget.type || 'bar';
+		const cardTitle = widget.title || 'Indicador Executivo';
+
+		const newCard = {
+			id: widget.id || `card_${Date.now()}`,
+			title: cardTitle,
+			prompt: widget.queryPrompt || cardTitle,
+			chartType,
+			size,
+			isExpandedHeight: Boolean(widget.rowSpan && widget.rowSpan > 1),
+			order: 0,
+			configString: JSON.stringify({
+				type: chartType,
+				title: cardTitle,
+				data: rows,
+			}),
+			lastRefreshedAt: widget.updatedAt || new Date().toISOString(),
+		};
+
+		const filtered = Array.isArray(existingCards)
+			? existingCards.filter((c) => c.id !== newCard.id)
+			: [];
+		const updated = [newCard, ...filtered.map((c, idx) => ({ ...c, order: idx + 1 }))];
+		localStorage.setItem(storageKey, JSON.stringify(updated));
+	} catch {
+		// Ignora falha de localStorage
+	}
+}
+
 export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({
 	configString,
 	hideHeader = false,
@@ -311,8 +375,35 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({
 	const gradientId = useMemo(() => `grad-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`, [rawId]);
 	// 'auto' usa Cards no mobile (< sm) e Tabela no desktop (>= sm) para type === 'table'
 	const [tableLayout, setTableLayout] = useState<'auto' | 'cards' | 'table'>('auto');
+	const [savePromptState, setSavePromptState] = useState<'ask' | 'saving' | 'saved' | 'dismissed' | 'error'>('ask');
+	const [saveErrorMessage, setSaveErrorMessage] = useState('');
 
 	const parsedResult = useMemo(() => parseDashboardConfig(configString), [configString]);
+
+	useEffect(() => {
+		if (hideHeader || parsedResult.status !== 'ready' || !parsedResult.config) {
+			return;
+		}
+		const currentTitle = (parsedResult.config.title || 'Indicadores Sankhya ERP').trim();
+		const currentType = parsedResult.config.type;
+
+		const handleSavedFromChat = (event: Event) => {
+			const customEvt = event as CustomEvent<{ title?: string; type?: string }>;
+			const savedWidget = customEvt.detail;
+			if (!savedWidget) return;
+			if (
+				savedWidget.type === currentType &&
+				(!savedWidget.title || savedWidget.title.trim() === currentTitle)
+			) {
+				setSavePromptState('saved');
+			}
+		};
+
+		window.addEventListener('gideon:dashboard-widget-saved', handleSavedFromChat);
+		return () => {
+			window.removeEventListener('gideon:dashboard-widget-saved', handleSavedFromChat);
+		};
+	}, [hideHeader, parsedResult]);
 
 	if (parsedResult.status === 'empty') {
 		return null;
@@ -893,6 +984,121 @@ export const DynamicDashboard: React.FC<DynamicDashboardProps> = React.memo(({
 						</div>
 					)}
 				</SafeChartContainer>
+			)}
+
+			{/* Pergunta interativa no Chat para salvar o gráfico no Dashboard do usuário com o mesmo layout */}
+			{!hideHeader && savePromptState !== 'dismissed' && (
+				<div className="mt-3.5 flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3.5 py-2.5 text-xs">
+					{savePromptState === 'saved' ? (
+						<div className="flex w-full flex-wrap items-center justify-between gap-2 text-emerald-800">
+							<div className="flex items-center gap-2 font-medium">
+								<CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+								<span>
+									Indicador <strong>&ldquo;{title || 'Indicadores Sankhya ERP'}&rdquo;</strong> salvo no <strong>Seu Dashboard</strong> com este mesmo layout!
+								</span>
+							</div>
+							<a
+								href="/dashboard"
+								className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white shadow-2xs transition hover:bg-emerald-700"
+							>
+								<LayoutDashboard className="h-3.5 w-3.5" />
+								<span>Ver no Seu Dashboard</span>
+							</a>
+						</div>
+					) : (
+						<>
+							<div className="flex items-center gap-2 text-slate-700">
+								<LayoutDashboard className="h-4 w-4 shrink-0 text-indigo-600" />
+								<span className="font-medium">
+									Deseja salvar este gráfico no <strong>Seu Dashboard</strong> como um indicador?
+								</span>
+							</div>
+
+							<div className="flex items-center gap-2">
+								{savePromptState === 'error' && saveErrorMessage && (
+									<span className="text-[11px] text-rose-600">{saveErrorMessage}</span>
+								)}
+								<button
+									type="button"
+									disabled={savePromptState === 'saving'}
+									onClick={async () => {
+										setSavePromptState('saving');
+										setSaveErrorMessage('');
+										try {
+											const token = localStorage.getItem('gideon.auth.token');
+											const resolvedTitle = title || 'Indicadores Sankhya ERP';
+											const defaultColSpan =
+												type === 'table' ||
+												type === 'line' ||
+												type === 'area' ||
+												type === 'horizontal-bar'
+													? 2
+													: 1;
+
+											const response = await fetch('/api/dashboard/widgets', {
+												method: 'POST',
+												headers: {
+													'Content-Type': 'application/json',
+													...(token ? { Authorization: `Bearer ${token}` } : {}),
+												},
+												body: JSON.stringify({
+													title: resolvedTitle,
+													type,
+													data,
+													colSpan: defaultColSpan,
+													rowSpan: 1,
+													queryPrompt: resolvedTitle,
+												}),
+											});
+
+											if (!response.ok) {
+												throw new Error('Não foi possível salvar no Dashboard.');
+											}
+
+											const resJson = await response.json();
+											const createdWidget = resJson?.data ?? {
+												title: resolvedTitle,
+												type,
+												data,
+												colSpan: defaultColSpan,
+											};
+											syncSavedWidgetToLocalDashboardCache(createdWidget);
+											setSavePromptState('saved');
+										} catch (err) {
+											setSavePromptState('error');
+											setSaveErrorMessage(
+												err instanceof Error ? err.message : 'Falha ao salvar indicador.'
+											);
+										}
+									}}
+									className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-2xs transition hover:bg-indigo-700 active:scale-95 disabled:opacity-50"
+								>
+									{savePromptState === 'saving' ? (
+										<>
+											<Loader2 className="h-3.5 w-3.5 animate-spin" />
+											<span>Salvando...</span>
+										</>
+									) : (
+										<>
+											<Plus className="h-3.5 w-3.5" />
+											<span>Sim, salvar no meu Dashboard</span>
+										</>
+									)}
+								</button>
+
+								<button
+									type="button"
+									disabled={savePromptState === 'saving'}
+									onClick={() => setSavePromptState('dismissed')}
+									className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+								>
+									<X className="h-3.5 w-3.5" />
+									<span>Agora não</span>
+								</button>
+							</div>
+						</>
+					)}
+				</div>
 			)}
 		</div>
 	);
