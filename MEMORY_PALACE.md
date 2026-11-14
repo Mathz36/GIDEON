@@ -470,3 +470,34 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
 - **Arquivos Impactados:**
   - `frontend/src/components/erp/SchemaDiagramExplorer.tsx`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Refinamento do Esquema ER: Harmonização com Tema do App, SVG Overflow Infinito, 2 Cliques p/ Edição e Auto-Save no Servidor
+- **Agentes Responsáveis:** `frontend`, `backend`, `planner`
+- **Tipo:** `refactor` / `fix` / `feat`
+- **Contexto & Motivação:**
+  O usuário solicitou 4 refinamentos pontuais na visualização do esquema do banco:
+  1. Manter a paleta visual no mesmo tema claro/clean do restante do Gideon (`slate-50`, cards brancos, bordas `slate-200`, detalhes `indigo-600`).
+  2. Corrigir o corte/desaparecimento das linhas SVG ao mover as tabelas para baixo no canvas.
+  3. Diferenciar arrastar de editar: 1 clique e segure arrasta livremente a tabela; 2 cliques rápidos abrem o popup/modal de edição (eliminando a abertura acidental do modal ao arrastar).
+  4. Salvar automaticamente no servidor (`POST /api/erp/schema/positions`) sempre que a organização do esquema for alterada (ao arrastar ou clicar em Auto-Organizar).
+- **Implementações Realizadas:**
+  1. **Harmonização Visual com o Tema do App (`SchemaDiagramExplorer.tsx`):**
+     - Canvas em `bg-slate-50/70` com dot grid sutil cinza (`radial-gradient(#cbd5e1 1.5px, transparent 1.5px)`).
+     - Caixas de tabelas em `bg-white border-slate-200 text-slate-900 shadow-sm` com header em `bg-slate-50/90`, colunas em `hover:bg-indigo-50/60`, badges `PK` em âmbar e `FK` em índigo.
+     - Barra de ferramentas e Radar Minimap em `bg-white/95 border-slate-200 shadow-md` com indicador animado *"Layout salvo no banco"*.
+     - Modal flutuante de edição em `bg-white border-slate-200 shadow-2xl text-slate-900` com backdrop `bg-slate-900/50 backdrop-blur-xs`.
+  2. **Correção de Clipping SVG Infinito (`SchemaDiagramExplorer.tsx`):**
+     - Aplicado `overflow: visible` e `width: 100%; height: 100%` no elemento `<svg>` e na camada de nós, eliminando qualquer recorte de linhas e conexões quando tabelas são posicionadas em coordenadas `y > 750` ou em áreas distantes do canvas.
+  3. **Lógica de Interação: 1 Clique Arrasta vs 2 Cliques Edita (`SchemaDiagramExplorer.tsx`):**
+     - `onMouseDown` + `onMouseMove` com medição de distância: 1 clique e segure permite arrastar a tabela com fluidez.
+     - `onDoubleClick`: 2 cliques rápidos abrem o modal de edição (além do botão explícito de lápis no cabeçalho).
+     - Removido `onClick` acidental de abertura de modal durante o arraste.
+  4. **Persistência de Layout no Servidor (`erp-configuration.service.ts`, `api.ts`, `SchemaDiagramExplorer.tsx`):**
+     - Criado `POST /api/erp/schema/positions` e adicionado suporte em `GET /api/erp/schema` para retornar `positions: Record<string, { x: number, y: number }>`.
+     - Salva posições em `backend/data/erp-schema-positions.json` e no `localStorage`, garantindo sincronização instantânea e persistente entre sessões e navegadores.
+- **Arquivos Impactados:**
+  - `backend/src/services/erp-configuration.service.ts`
+  - `backend/src/routes/api.ts`
+  - `frontend/src/components/erp/SchemaDiagramExplorer.tsx`
+  - `MEMORY_PALACE.md`

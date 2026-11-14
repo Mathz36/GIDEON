@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } fro
 import {
 	AlertCircle,
 	ArrowRight,
+	Check,
 	CheckCircle2,
 	CircleDot,
 	Database,
@@ -66,12 +67,12 @@ interface NodePosition {
 }
 
 const NODE_WIDTH = 270;
-const HEADER_HEIGHT = 46;
+const HEADER_HEIGHT = 44;
 const ROW_HEIGHT = 28;
-const STORAGE_KEY = 'gideon_supabase_schema_positions_v1';
+const STORAGE_KEY = 'gideon_schema_diagram_positions_v2';
 
 /**
- * Gera posições automáticas harmoniosas em camadas para as tabelas
+ * Posições padrão limpas e organizadas em colunas lógicas
  */
 function computeDefaultPositions(tables: SchemaTableItem[]): Record<string, NodePosition> {
 	const positions: Record<string, NodePosition> = {};
@@ -92,13 +93,13 @@ function computeDefaultPositions(tables: SchemaTableItem[]): Record<string, Node
 		if (priorities[tName]) {
 			const { col, row } = priorities[tName];
 			positions[tName] = {
-				x: 80 + col * 360,
-				y: 60 + row * 280,
+				x: 60 + col * 360,
+				y: 50 + row * 300,
 			};
 		} else {
 			positions[tName] = {
-				x: 80 + genericCol * 360,
-				y: 60 + genericRow * 280,
+				x: 60 + genericCol * 360,
+				y: 50 + genericRow * 300,
 			};
 			genericCol++;
 			if (genericCol > 2) {
@@ -120,34 +121,80 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 	const [error, setError] = useState('');
 	const [successMessage, setSuccessMessage] = useState('');
 
+	// Feedback visual de salvamento automático do layout
+	const [isSavedBadgeVisible, setIsSavedBadgeVisible] = useState(false);
+	const saveBadgeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 	// Câmera do Canvas (pan & zoom)
 	const [camera, setCamera] = useState<{ x: number; y: number; zoom: number }>({
-		x: 40,
-		y: 40,
-		zoom: 0.9,
+		x: 30,
+		y: 30,
+		zoom: 0.95,
 	});
 
-	// Posições dos nós das tabelas
+	// Posições das tabelas no Canvas
 	const [positions, setPositions] = useState<Record<string, NodePosition>>({});
 
-	// Estados de interação do Canvas
+	// Estados de interação do mouse
 	const [isPanning, setIsPanning] = useState(false);
 	const [panStart, setPanStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 	const [draggingNode, setDraggingNode] = useState<{ tableName: string; offsetX: number; offsetY: number } | null>(null);
+	const hasMovedRef = useRef<boolean>(false);
+	const startMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
 	// Filtros, Busca & Destaques
 	const [searchQuery, setSearchQuery] = useState('');
 	const [hoveredTable, setHoveredTable] = useState<string | null>(null);
+	const [selectedTableForHighlight, setSelectedTableForHighlight] = useState<string | null>(null);
 	const [hoveredRelationship, setHoveredRelationship] = useState<SchemaRelationshipItem | null>(null);
 	const [isFullscreen, setIsFullscreen] = useState(false);
 
-	// Popup / Modal de Edição da Tabela (ao clicar)
+	// Popup / Modal de Edição da Tabela (ao dar 2 cliques)
 	const [activeModalTable, setActiveModalTable] = useState<SchemaTableItem | null>(null);
 	const [editTableDescription, setEditTableDescription] = useState('');
 	const [editColumns, setEditColumns] = useState<SchemaColumnItem[]>([]);
 	const [isSavingSchema, setIsSavingSchema] = useState(false);
 
-	// Carrega esquema e dados
+	// Dispara badge de layout salvo
+	const triggerSavedBadge = useCallback(() => {
+		setIsSavedBadgeVisible(true);
+		if (saveBadgeTimeoutRef.current) {
+			clearTimeout(saveBadgeTimeoutRef.current);
+		}
+		saveBadgeTimeoutRef.current = setTimeout(() => {
+			setIsSavedBadgeVisible(false);
+		}, 2500);
+	}, []);
+
+	// Salva posições no backend e no localStorage
+	const persistPositions = useCallback(
+		async (newPos: Record<string, NodePosition>) => {
+			// 1. Salva imediatamente no localStorage (0ms)
+			try {
+				localStorage.setItem(STORAGE_KEY, JSON.stringify(newPos));
+			} catch {
+				// quota
+			}
+
+			// 2. Salva no backend para sincronização entre usuários e dispositivos
+			try {
+				await fetch('/api/erp/schema/positions', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						...(token ? { Authorization: `Bearer ${token}` } : {}),
+					},
+					body: JSON.stringify({ positions: newPos }),
+				});
+				triggerSavedBadge();
+			} catch (err) {
+				console.warn('[SchemaDiagramExplorer] Aviso ao salvar posições no backend:', err);
+			}
+		},
+		[token, triggerSavedBadge],
+	);
+
+	// Carrega dados e esquema do backend
 	const loadSchema = async () => {
 		setIsLoading(true);
 		setError('');
@@ -161,25 +208,36 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 				throw new Error('Não foi possível carregar o esquema do banco de dados.');
 			}
 			const json = (await res.json()) as {
-				data?: { tables: SchemaTableItem[]; relationships: SchemaRelationshipItem[] };
+				data?: {
+					tables: SchemaTableItem[];
+					relationships: SchemaRelationshipItem[];
+					positions?: Record<string, NodePosition>;
+				};
 			};
+
 			const loadedTables = json.data?.tables ?? [];
 			setTables(loadedTables);
 			setRelationships(json.data?.relationships ?? []);
 
-			// Carrega posições salvas ou computa padrão
-			try {
-				const saved = localStorage.getItem(STORAGE_KEY);
-				if (saved) {
-					const parsed = JSON.parse(saved) as Record<string, NodePosition>;
-					const merged = { ...computeDefaultPositions(loadedTables), ...parsed };
-					setPositions(merged);
-				} else {
-					setPositions(computeDefaultPositions(loadedTables));
+			const defaultPos = computeDefaultPositions(loadedTables);
+			let resolvedPositions = defaultPos;
+
+			// Prioridade 1: Posições salvas no backend
+			if (json.data?.positions && Object.keys(json.data.positions).length > 0) {
+				resolvedPositions = { ...defaultPos, ...json.data.positions };
+			} else {
+				// Prioridade 2: LocalStorage
+				try {
+					const saved = localStorage.getItem(STORAGE_KEY);
+					if (saved) {
+						resolvedPositions = { ...defaultPos, ...JSON.parse(saved) };
+					}
+				} catch {
+					// fallback
 				}
-			} catch {
-				setPositions(computeDefaultPositions(loadedTables));
 			}
+
+			setPositions(resolvedPositions);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : 'Erro ao carregar dados do esquema.');
 		} finally {
@@ -191,24 +249,15 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		void loadSchema();
 	}, [token]);
 
-	// Salva posições no localStorage ao mover
-	const savePositions = useCallback((newPos: Record<string, NodePosition>) => {
-		try {
-			localStorage.setItem(STORAGE_KEY, JSON.stringify(newPos));
-		} catch {
-			// ignore quota
-		}
-	}, []);
-
-	// Auto-layout / Organizar
+	// Auto-layout / Organizar e salvar
 	const handleAutoLayout = () => {
 		const defaultPos = computeDefaultPositions(tables);
 		setPositions(defaultPos);
-		savePositions(defaultPos);
-		setCamera({ x: 40, y: 40, zoom: 0.9 });
+		setCamera({ x: 30, y: 30, zoom: 0.95 });
+		void persistPositions(defaultPos);
 	};
 
-	// Fit to view
+	// Ajustar à tela (Fit to View)
 	const handleFitView = () => {
 		if (tables.length === 0) return;
 		let minX = Infinity;
@@ -235,10 +284,10 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 
 		const zoomX = width / contentWidth;
 		const zoomY = height / contentHeight;
-		const zoom = Math.min(1.2, Math.max(0.4, Math.min(zoomX, zoomY)));
+		const zoom = Math.min(1.15, Math.max(0.35, Math.min(zoomX, zoomY)));
 
-		const x = (width - contentWidth * (zoom / 0.9)) / 2 - minX * zoom + 40;
-		const y = (height - contentHeight * (zoom / 0.9)) / 2 - minY * zoom + 40;
+		const x = (width - contentWidth * (zoom / 0.95)) / 2 - minX * zoom + 30;
+		const y = (height - contentHeight * (zoom / 0.95)) / 2 - minY * zoom + 30;
 
 		setCamera({ x, y, zoom });
 	};
@@ -249,6 +298,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === 'svg') {
 			setIsPanning(true);
 			setPanStart({ x: e.clientX - camera.x, y: e.clientY - camera.y });
+			setSelectedTableForHighlight(null);
 		}
 	};
 
@@ -260,6 +310,11 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 				y: e.clientY - panStart.y,
 			}));
 		} else if (draggingNode) {
+			const distMoved = Math.hypot(e.clientX - startMousePosRef.current.x, e.clientY - startMousePosRef.current.y);
+			if (distMoved > 3) {
+				hasMovedRef.current = true;
+			}
+
 			const newX = (e.clientX - camera.x) / camera.zoom - draggingNode.offsetX;
 			const newY = (e.clientY - camera.y) / camera.zoom - draggingNode.offsetY;
 
@@ -278,8 +333,12 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 			setIsPanning(false);
 		}
 		if (draggingNode) {
+			if (hasMovedRef.current) {
+				// Salva organização sempre que uma tabela for reposicionada
+				void persistPositions(positions);
+			}
 			setDraggingNode(null);
-			savePositions(positions);
+			hasMovedRef.current = false;
 		}
 	};
 
@@ -295,12 +354,20 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		});
 	};
 
+	// Inicia drag da tabela (1 clique e segure)
 	const handleStartDragNode = (e: ReactMouseEvent, tableName: string) => {
+		// Permite drag com botão esquerdo
+		if (e.button !== 0) return;
 		e.stopPropagation();
+
 		const tName = tableName.toLowerCase();
 		const currentPos = positions[tName] ?? { x: 0, y: 0 };
 		const mouseCanvasX = (e.clientX - camera.x) / camera.zoom;
 		const mouseCanvasY = (e.clientY - camera.y) / camera.zoom;
+
+		hasMovedRef.current = false;
+		startMousePosRef.current = { x: e.clientX, y: e.clientY };
+		setSelectedTableForHighlight(tName);
 
 		setDraggingNode({
 			tableName: tName,
@@ -309,7 +376,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		});
 	};
 
-	// Abertura do Popup / Modal
+	// Abertura do Popup / Modal (apenas em 2 cliques ou botão de editar)
 	const handleOpenTableModal = (table: SchemaTableItem) => {
 		setActiveModalTable(table);
 		setEditTableDescription(table.description);
@@ -380,7 +447,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		}
 	};
 
-	// Auto-detectar ligações
+	// Auto-detectar ligações (FKs)
 	const handleAutoDetectFks = async () => {
 		setIsDetectingFks(true);
 		setError('');
@@ -403,7 +470,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 				setRelationships(json.data.relationships);
 			}
 			setSuccessMessage(
-				`Detecção concluída! ${json.data?.relationships.length ?? 0} relacionamento(s) ativos no banco da Gideon.`,
+				`Detecção concluída! ${json.data?.relationships.length ?? 0} relacionamento(s) mapeados e salvos no banco.`,
 			);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : 'Erro ao detectar ligações.');
@@ -465,7 +532,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		);
 	};
 
-	// Tabelas filtradas pela barra de busca
+	// Tabelas filtradas pela busca
 	const filteredTables = useMemo(() => {
 		if (!searchQuery.trim()) return tables;
 		const q = searchQuery.toLowerCase().trim();
@@ -477,7 +544,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		);
 	}, [tables, searchQuery]);
 
-	// Tabela mapeada por nome para lookups rápidos
+	// Lookup rápido de tabelas
 	const tableMap = useMemo(() => {
 		const m = new Map<string, SchemaTableItem>();
 		for (const t of tables) {
@@ -486,7 +553,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		return m;
 	}, [tables]);
 
-	// Cálculo das Curvas SVG (Edges de relacionamentos)
+	// Curvas SVG das conexões (com overflow: visible para NUNCA serem cortadas)
 	const edges = useMemo(() => {
 		const calculated: Array<{
 			id: string;
@@ -523,7 +590,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 			let fromX = fromPos.x + NODE_WIDTH;
 			let toX = toPos.x;
 
-			// Se a tabela de destino estiver à esquerda da de origem
+			// Se a tabela de destino estiver à esquerda
 			if (toPos.x + NODE_WIDTH < fromPos.x) {
 				fromX = fromPos.x;
 				toX = toPos.x + NODE_WIDTH;
@@ -532,12 +599,14 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 				toX = toPos.x + NODE_WIDTH;
 			}
 
-			const dx = Math.max(40, Math.abs(toX - fromX) * 0.45);
+			const dx = Math.max(45, Math.abs(toX - fromX) * 0.45);
 			const path = `M ${fromX} ${fromY} C ${fromX + (toX > fromX ? dx : -dx)} ${fromY}, ${toX + (toX > fromX ? -dx : dx)} ${toY}, ${toX} ${toY}`;
 
 			const isHighlighted =
 				hoveredTable === rel.fromTable.toLowerCase() ||
 				hoveredTable === rel.toTable.toLowerCase() ||
+				selectedTableForHighlight === rel.fromTable.toLowerCase() ||
+				selectedTableForHighlight === rel.toTable.toLowerCase() ||
 				(hoveredRelationship?.fromTable === rel.fromTable &&
 					hoveredRelationship?.toTable === rel.toTable &&
 					hoveredRelationship?.fromColumn === rel.fromColumn);
@@ -555,7 +624,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		}
 
 		return calculated;
-	}, [relationships, tableMap, positions, hoveredTable, hoveredRelationship]);
+	}, [relationships, tableMap, positions, hoveredTable, selectedTableForHighlight, hoveredRelationship]);
 
 	// Bounding box para o Minimap
 	const minimapData = useMemo(() => {
@@ -574,7 +643,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 			maxY = Math.max(maxY, pos.y + h);
 		}
 
-		const padding = 150;
+		const padding = 160;
 		minX -= padding;
 		minY -= padding;
 		maxX += padding;
@@ -586,47 +655,59 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 		return { minX, minY, worldWidth, worldHeight };
 	}, [tables, positions]);
 
-	// Métricas de cabeçalho
+	// Métricas
 	const totalRows = useMemo(() => tables.reduce((acc, t) => acc + t.rowCount, 0), [tables]);
 	const totalColumns = useMemo(() => tables.reduce((acc, t) => acc + t.columns.length, 0), [tables]);
 
 	return (
-		<div className={`flex flex-col rounded-2xl border border-slate-800 bg-[#0c0d10] text-slate-100 shadow-2xl transition-all ${isFullscreen ? 'fixed inset-0 z-50 rounded-none' : 'relative mt-4'}`}>
-			{/* Barra Superior de Ferramentas estilo Supabase Studio */}
-			<div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-[#12141c]/90 px-4 py-3 backdrop-blur-md">
+		<div
+			className={`flex flex-col rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-sm transition-all ${
+				isFullscreen ? 'fixed inset-0 z-50 rounded-none' : 'relative mt-4'
+			}`}
+		>
+			{/* Barra Superior de Ferramentas — Tema Clean / Gideon */}
+			<div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 rounded-t-2xl">
 				<div className="flex items-center gap-3">
-					<div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-						<GitBranch className="h-4 w-4" />
+					<div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100 shadow-2xs">
+						<GitBranch className="h-4.5 w-4.5" />
 					</div>
 					<div>
 						<div className="flex items-center gap-2">
-							<span className="font-bold text-sm text-slate-100">Visualizador de Esquema & Banco PostgreSQL</span>
-							<span className="rounded-full bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-400 border border-emerald-500/20">
-								Supabase Mode
+							<span className="font-bold text-sm text-slate-900">
+								Esquema do Banco de Dados & Dicionário IA
 							</span>
+							<span className="rounded-md bg-indigo-50 px-2 py-0.5 font-mono text-[10px] font-bold text-indigo-700 border border-indigo-100">
+								Diagrama ER
+							</span>
+							{isSavedBadgeVisible && (
+								<span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 font-sans text-[10px] font-semibold text-emerald-700 border border-emerald-200 animate-in fade-in duration-150">
+									<Check className="h-3 w-3 text-emerald-600" />
+									Layout salvo no banco
+								</span>
+							)}
 						</div>
-						<p className="text-[11px] text-slate-400">
-							{tables.length} tabelas no banco • {totalColumns} colunas • {totalRows.toLocaleString('pt-BR')} registros • {relationships.length} ligações (FKs)
+						<p className="text-[11px] text-slate-500">
+							{tables.length} tabelas dinâmicas • {totalColumns} colunas • {totalRows.toLocaleString('pt-BR')} registros • {relationships.length} conexões (FKs)
 						</p>
 					</div>
 				</div>
 
-				{/* Controles: Busca, Auto-Layout, Auto-Detectar, Zoom e Fullscreen */}
+				{/* Controles de Ação, Busca, Auto-Organizar e Zoom */}
 				<div className="flex flex-wrap items-center gap-2">
 					<div className="relative">
-						<Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-500" />
+						<Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
 						<input
 							type="text"
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
 							placeholder="Buscar tabela ou coluna..."
-							className="h-8 w-48 rounded-lg border border-slate-700 bg-slate-900/80 pl-8 pr-3 text-xs text-slate-200 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+							className="h-8 w-44 rounded-lg border border-slate-200 bg-slate-50 px-8 text-xs text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100 transition"
 						/>
 						{searchQuery && (
 							<button
 								type="button"
 								onClick={() => setSearchQuery('')}
-								className="absolute right-2 top-2 text-slate-400 hover:text-white"
+								className="absolute right-2 top-2 text-slate-400 hover:text-slate-700"
 							>
 								<X className="h-3.5 w-3.5" />
 							</button>
@@ -636,20 +717,20 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 					<button
 						type="button"
 						onClick={handleAutoLayout}
-						title="Organizar tabelas automaticamente em colunas e camadas"
-						className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 hover:text-white transition"
+						title="Organizar tabelas automaticamente em camadas lógicas e salvar"
+						className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-slate-900 shadow-2xs transition"
 					>
-						<RotateCcw className="h-3.5 w-3.5 text-slate-400" />
+						<RotateCcw className="h-3.5 w-3.5 text-slate-500" />
 						<span>Auto-Organizar</span>
 					</button>
 
 					<button
 						type="button"
 						onClick={handleFitView}
-						title="Ajustar todas as tabelas na tela"
-						className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 hover:text-white transition"
+						title="Ajustar todas as tabelas perfeitamente na tela"
+						className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-slate-900 shadow-2xs transition"
 					>
-						<Maximize2 className="h-3.5 w-3.5 text-slate-400" />
+						<Maximize2 className="h-3.5 w-3.5 text-slate-500" />
 						<span>Ajustar à Tela</span>
 					</button>
 
@@ -657,30 +738,30 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 						type="button"
 						onClick={handleAutoDetectFks}
 						disabled={isDetectingFks}
-						title="Detectar ligações e chaves estrangeiras automaticamente"
-						className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 text-xs font-semibold text-indigo-300 hover:bg-indigo-500/20 transition disabled:opacity-50"
+						title="Mapear relacionamentos e chaves estrangeiras automaticamente"
+						className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition disabled:opacity-50"
 					>
-						<Sparkles className={`h-3.5 w-3.5 text-indigo-400 ${isDetectingFks ? 'animate-spin' : ''}`} />
+						<Sparkles className={`h-3.5 w-3.5 text-indigo-600 ${isDetectingFks ? 'animate-spin' : ''}`} />
 						<span>{isDetectingFks ? 'Detectando...' : 'Auto-Detectar FKs'}</span>
 					</button>
 
-					<div className="flex items-center rounded-lg border border-slate-700 bg-slate-800/80 p-0.5">
+					<div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5">
 						<button
 							type="button"
 							onClick={() => setCamera((prev) => ({ ...prev, zoom: Math.max(0.3, prev.zoom * 0.9) }))}
-							title="Zoom Menos"
-							className="rounded p-1 text-slate-400 hover:bg-slate-700 hover:text-white"
+							title="Diminuir Zoom"
+							className="rounded p-1 text-slate-500 hover:bg-white hover:text-slate-800 transition"
 						>
 							<ZoomOut className="h-3.5 w-3.5" />
 						</button>
-						<span className="px-1.5 font-mono text-[11px] text-slate-300">
+						<span className="px-1.5 font-mono text-[11px] font-semibold text-slate-700">
 							{Math.round(camera.zoom * 100)}%
 						</span>
 						<button
 							type="button"
 							onClick={() => setCamera((prev) => ({ ...prev, zoom: Math.min(2.0, prev.zoom * 1.1) }))}
-							title="Zoom Mais"
-							className="rounded p-1 text-slate-400 hover:bg-slate-700 hover:text-white"
+							title="Aumentar Zoom"
+							className="rounded p-1 text-slate-500 hover:bg-white hover:text-slate-800 transition"
 						>
 							<ZoomIn className="h-3.5 w-3.5" />
 						</button>
@@ -689,73 +770,78 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 					<button
 						type="button"
 						onClick={() => setIsFullscreen(!isFullscreen)}
-						title={isFullscreen ? 'Sair da Tela Cheia' : 'Tela Cheia'}
-						className="rounded-lg border border-slate-700 bg-slate-800/80 p-1.5 text-slate-300 hover:bg-slate-700 hover:text-white transition"
+						title={isFullscreen ? 'Sair da Tela Cheia' : 'Visualizar em Tela Cheia'}
+						className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-600 hover:bg-slate-50 hover:text-slate-900 shadow-2xs transition"
 					>
 						{isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
 					</button>
 				</div>
 			</div>
 
-			{/* Mensagens de Alerta & Sucesso */}
+			{/* Alertas */}
 			{error && (
-				<div className="flex items-center justify-between gap-2 border-b border-rose-900/50 bg-rose-950/60 px-4 py-2 text-xs text-rose-300">
+				<div className="flex items-center justify-between gap-2 border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">
 					<div className="flex items-center gap-2">
-						<AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+						<AlertCircle className="h-4 w-4 text-rose-500 shrink-0" />
 						<span>{error}</span>
 					</div>
-					<button type="button" onClick={() => setError('')} className="text-rose-400 hover:text-white">
+					<button type="button" onClick={() => setError('')} className="text-rose-500 hover:text-rose-800">
 						<X className="h-3.5 w-3.5" />
 					</button>
 				</div>
 			)}
 
 			{successMessage && (
-				<div className="flex items-center justify-between gap-2 border-b border-emerald-900/50 bg-emerald-950/60 px-4 py-2 text-xs text-emerald-300">
+				<div className="flex items-center justify-between gap-2 border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">
 					<div className="flex items-center gap-2">
-						<CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+						<CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
 						<span>{successMessage}</span>
 					</div>
-					<button type="button" onClick={() => setSuccessMessage('')} className="text-emerald-400 hover:text-white">
+					<button type="button" onClick={() => setSuccessMessage('')} className="text-emerald-500 hover:text-emerald-800">
 						<X className="h-3.5 w-3.5" />
 					</button>
 				</div>
 			)}
 
-			{/* Canvas Interativo Infinito (Dot Grid Supabase) */}
+			{/* Canvas do Esquema com Dot Grid Limpo — Tema do App */}
 			<div
 				ref={containerRef}
 				onMouseDown={handleMouseDownCanvas}
 				onMouseMove={handleMouseMoveCanvas}
 				onMouseUp={handleMouseUpCanvas}
 				onWheel={handleWheelCanvas}
-				className={`relative w-full overflow-hidden select-none cursor-grab active:cursor-grabbing ${isFullscreen ? 'h-[calc(100vh-60px)]' : 'h-[750px]'}`}
+				className={`relative w-full overflow-hidden select-none cursor-grab active:cursor-grabbing bg-slate-50/70 ${
+					isFullscreen ? 'h-[calc(100vh-65px)]' : 'h-[750px]'
+				}`}
 				style={{
-					backgroundImage: `radial-gradient(#262a36 1px, transparent 1px)`,
+					backgroundImage: `radial-gradient(#cbd5e1 1.5px, transparent 1.5px)`,
 					backgroundSize: `${24 * camera.zoom}px ${24 * camera.zoom}px`,
 					backgroundPosition: `${camera.x}px ${camera.y}px`,
 				}}
 			>
 				{isLoading ? (
-					<div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xs">
-						<RefreshCw className="h-8 w-8 animate-spin text-emerald-400" />
-						<p className="mt-3 text-xs font-semibold tracking-wider text-slate-300 uppercase">
+					<div className="absolute inset-0 flex flex-col items-center justify-center bg-white/70 backdrop-blur-xs z-30">
+						<RefreshCw className="h-8 w-8 animate-spin text-indigo-600" />
+						<p className="mt-3 text-xs font-semibold tracking-wider text-slate-600 uppercase">
 							Carregando Esquema & Diagrama ER...
 						</p>
 					</div>
 				) : null}
 
-				{/* Camada SVG dos Relacionamentos / Curvas (Edges) */}
+				{/* Camada SVG dos Relacionamentos — COM OVERFLOW VISIBLE PARA NUNCA SUMIR AO DESCER */}
 				<svg
-					className="pointer-events-none absolute inset-0 h-full w-full"
+					className="pointer-events-none absolute inset-0 overflow-visible"
 					style={{
+						overflow: 'visible',
+						width: '100%',
+						height: '100%',
 						transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
 						transformOrigin: '0 0',
 					}}
 				>
 					<defs>
 						<marker
-							id="arrow-default"
+							id="arrow-light-default"
 							viewBox="0 0 10 10"
 							refX="6"
 							refY="5"
@@ -763,10 +849,10 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 							markerHeight="6"
 							orient="auto-start-reverse"
 						>
-							<path d="M 0 1 L 8 5 L 0 9 z" fill="#475569" />
+							<path d="M 0 1 L 8 5 L 0 9 z" fill="#94a3b8" />
 						</marker>
 						<marker
-							id="arrow-active"
+							id="arrow-light-active"
 							viewBox="0 0 10 10"
 							refX="6"
 							refY="5"
@@ -774,50 +860,47 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 							markerHeight="7"
 							orient="auto-start-reverse"
 						>
-							<path d="M 0 1 L 8 5 L 0 9 z" fill="#10b981" />
+							<path d="M 0 1 L 8 5 L 0 9 z" fill="#6366f1" />
 						</marker>
-						<filter id="glow-edge" x="-20%" y="-20%" width="140%" height="140%">
-							<feGaussianBlur stdDeviation="3" result="blur" />
-							<feComposite in="SourceGraphic" in2="blur" operator="over" />
-						</filter>
 					</defs>
 
 					{edges.map((edge) => (
 						<g key={edge.id} className="transition-all duration-150">
-							{/* Linha externa para capturar clique/hover mais facilmente */}
+							{/* Linha de conexão cúbica */}
 							<path
 								d={edge.path}
 								fill="none"
-								stroke={edge.isHighlighted ? '#10b981' : '#334155'}
-								strokeWidth={edge.isHighlighted ? 3 : 1.75}
+								stroke={edge.isHighlighted ? '#6366f1' : '#94a3b8'}
+								strokeWidth={edge.isHighlighted ? 2.75 : 1.75}
 								strokeDasharray={edge.isHighlighted ? 'none' : '4 3'}
-								filter={edge.isHighlighted ? 'url(#glow-edge)' : undefined}
-								markerEnd={edge.isHighlighted ? 'url(#arrow-active)' : 'url(#arrow-default)'}
+								markerEnd={edge.isHighlighted ? 'url(#arrow-light-active)' : 'url(#arrow-light-default)'}
 								className="transition-colors duration-200"
 							/>
-							{/* Ponto inicial na porta de saída (FK) */}
+							{/* Bolinha na porta de origem */}
 							<circle
 								cx={edge.fromX}
 								cy={edge.fromY}
 								r={edge.isHighlighted ? 4 : 3}
-								fill={edge.isHighlighted ? '#10b981' : '#64748b'}
+								fill={edge.isHighlighted ? '#6366f1' : '#94a3b8'}
 							/>
 						</g>
 					))}
 				</svg>
 
-				{/* Camada dos Nós das Tabelas (Nodes estilo Supabase Studio) */}
+				{/* Camada das Tabelas (Nós no Canvas) */}
 				<div
-					className="absolute inset-0 pointer-events-none"
+					className="absolute inset-0 pointer-events-none overflow-visible"
 					style={{
+						overflow: 'visible',
 						transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
 						transformOrigin: '0 0',
 					}}
 				>
 					{filteredTables.map((table) => {
 						const tName = table.tableName.toLowerCase();
-						const pos = positions[tName] ?? { x: 80, y: 80 };
+						const pos = positions[tName] ?? { x: 60, y: 60 };
 						const isThisHovered = hoveredTable === tName;
+						const isThisSelected = selectedTableForHighlight === tName;
 						const isSearchMatch = searchQuery && (
 							table.tableName.toLowerCase().includes(searchQuery.toLowerCase()) ||
 							table.columns.some((c) => c.columnName.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -832,29 +915,28 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 								}}
 								onMouseEnter={() => setHoveredTable(tName)}
 								onMouseLeave={() => setHoveredTable(null)}
-								onClick={() => handleOpenTableModal(table)}
-								className={`pointer-events-auto absolute rounded-xl border bg-[#141721]/95 text-slate-100 shadow-xl transition-shadow backdrop-blur-md cursor-pointer group ${
-									isThisHovered
-										? 'border-emerald-500/80 shadow-emerald-500/20 shadow-2xl ring-1 ring-emerald-500'
+								onMouseDown={(e) => handleStartDragNode(e, table.tableName)}
+								onDoubleClick={() => handleOpenTableModal(table)}
+								title="1 clique e segure para arrastar • 2 cliques para editar"
+								className={`pointer-events-auto absolute rounded-xl border bg-white text-slate-800 shadow-sm transition-all duration-150 cursor-grab active:cursor-grabbing select-none group ${
+									isThisSelected || isThisHovered
+										? 'border-indigo-500 shadow-xl shadow-indigo-100 ring-2 ring-indigo-500/20'
 										: isSearchMatch
-										? 'border-indigo-500/80 shadow-indigo-500/20 shadow-xl ring-1 ring-indigo-500'
-										: 'border-slate-800 hover:border-slate-700 hover:shadow-2xl'
+										? 'border-amber-400 shadow-md ring-2 ring-amber-400/20'
+										: 'border-slate-200 hover:border-slate-300 hover:shadow-md'
 								}`}
 							>
-								{/* Header do Card da Tabela com Handler de Drag */}
-								<div
-									onMouseDown={(e) => handleStartDragNode(e, table.tableName)}
-									className="flex items-center justify-between border-b border-slate-800/80 bg-[#191c28] px-3 py-2.5 rounded-t-xl cursor-grab active:cursor-grabbing"
-								>
+								{/* Header do Card */}
+								<div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/90 px-3 py-2 rounded-t-xl">
 									<div className="flex items-center gap-2 overflow-hidden">
-										<TableIcon className="h-4 w-4 text-emerald-400 shrink-0" />
-										<span className="font-mono text-xs font-bold text-slate-100 truncate" title={table.tableName}>
+										<TableIcon className="h-4 w-4 text-indigo-600 shrink-0" />
+										<span className="font-mono text-xs font-bold text-slate-900 truncate" title={table.tableName}>
 											{table.tableName}
 										</span>
 									</div>
 
 									<div className="flex items-center gap-1.5 shrink-0">
-										<span className="font-mono text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">
+										<span className="font-mono text-[10px] font-semibold text-slate-500 bg-slate-200/70 px-1.5 py-0.5 rounded">
 											{table.columns.length}
 										</span>
 										<button
@@ -863,15 +945,15 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 												e.stopPropagation();
 												handleOpenTableModal(table);
 											}}
-											title="Clique para editar descrições da tabela e colunas"
-											className="rounded p-1 text-slate-400 hover:bg-slate-700 hover:text-white transition"
+											title="Editar detalhes da tabela e colunas (ou dê 2 cliques)"
+											className="rounded p-1 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600 transition"
 										>
 											<Edit3 className="h-3 w-3" />
 										</button>
 									</div>
 								</div>
 
-								{/* Lista de Colunas (estilo Supabase Studio) */}
+								{/* Lista de Colunas da Tabela */}
 								<div className="py-1">
 									{table.columns.map((col) => {
 										const isPk = col.isPrimaryKey;
@@ -882,35 +964,39 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 											<div
 												key={col.columnName}
 												title={col.description ? `${col.columnName}: ${col.description}` : col.columnName}
-												className={`flex items-center justify-between px-3 py-1 text-xs transition-colors hover:bg-slate-800/60 ${
-													isMatch ? 'bg-indigo-500/20 font-semibold' : ''
+												className={`flex items-center justify-between px-3 py-1 text-xs transition-colors hover:bg-indigo-50/60 ${
+													isMatch ? 'bg-amber-50 font-bold text-amber-900' : ''
 												}`}
 												style={{ height: `${ROW_HEIGHT}px` }}
 											>
 												<div className="flex items-center gap-2 overflow-hidden pr-2">
 													{isPk ? (
 														<span title="Chave Primária (PK)" className="shrink-0 flex items-center">
-															<KeyRound className="h-3 w-3 text-amber-400" />
+															<KeyRound className="h-3.5 w-3.5 text-amber-500" />
 														</span>
 													) : isFk ? (
-														<span title={`Chave Estrangeira -> ${col.foreignKeyToTable}.${col.foreignKeyToColumn}`} className="shrink-0 flex items-center">
-															<Link2 className="h-3 w-3 text-indigo-400" />
+														<span title={`Chave Estrangeira (FK) -> ${col.foreignKeyToTable}.${col.foreignKeyToColumn}`} className="shrink-0 flex items-center">
+															<Link2 className="h-3.5 w-3.5 text-indigo-600" />
 														</span>
 													) : (
-														<CircleDot className="h-2.5 w-2.5 text-slate-600 shrink-0" />
+														<CircleDot className="h-2.5 w-2.5 text-slate-300 shrink-0" />
 													)}
 
 													<span
 														className={`font-mono text-[11px] truncate ${
-															isPk ? 'font-bold text-amber-200' : isFk ? 'text-indigo-200 font-medium' : 'text-slate-300'
+															isPk
+																? 'font-bold text-slate-900'
+																: isFk
+																? 'text-indigo-950 font-medium'
+																: 'text-slate-700'
 														}`}
 													>
 														{col.columnName}
 													</span>
 												</div>
 
-												<div className="flex items-center gap-1 shrink-0">
-													<span className="font-mono text-[10px] text-slate-500">
+												<div className="flex items-center shrink-0">
+													<span className="font-mono text-[10px] text-slate-400">
 														{col.dataType ? col.dataType.toLowerCase() : 'text'}
 													</span>
 												</div>
@@ -919,11 +1005,11 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 									})}
 								</div>
 
-								{/* Rodapé do Card com Total de Linhas e Dica de Clique */}
-								<div className="flex items-center justify-between border-t border-slate-800/80 bg-[#12141c] px-3 py-1.5 text-[10px] text-slate-500 rounded-b-xl">
+								{/* Rodapé do Card */}
+								<div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/70 px-3 py-1.5 text-[10px] text-slate-500 rounded-b-xl">
 									<span>{table.rowCount.toLocaleString('pt-BR')} linhas</span>
-									<span className="text-[9px] text-slate-500 group-hover:text-emerald-400 transition-colors">
-										Clique para editar
+									<span className="text-[9px] font-medium text-slate-400 group-hover:text-indigo-600 transition-colors">
+										2 cliques p/ editar
 									</span>
 								</div>
 							</div>
@@ -931,9 +1017,9 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 					})}
 				</div>
 
-				{/* Mini-Mapa no Canto Inferior Direito (estilo Supabase Studio) */}
+				{/* Mini-Mapa no Canto Inferior Direito — Tema Clean */}
 				{minimapData && (
-					<div className="absolute bottom-4 right-4 z-20 h-32 w-52 overflow-hidden rounded-xl border border-slate-800 bg-[#0f1118]/90 p-2 shadow-2xl backdrop-blur-md">
+					<div className="absolute bottom-4 right-4 z-20 h-32 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white/95 p-2 shadow-lg backdrop-blur-md">
 						<div className="relative h-full w-full">
 							{tables.map((t) => {
 								const pos = positions[t.tableName.toLowerCase()] ?? { x: 0, y: 0 };
@@ -944,6 +1030,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 								const normH = (nodeH / minimapData.worldHeight) * 100;
 
 								const isHover = hoveredTable === t.tableName.toLowerCase();
+								const isSelected = selectedTableForHighlight === t.tableName.toLowerCase();
 
 								return (
 									<div
@@ -955,7 +1042,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 											height: `${Math.max(4, normH)}%`,
 										}}
 										className={`absolute rounded-xs transition-colors ${
-											isHover ? 'bg-emerald-400 ring-1 ring-emerald-300' : 'bg-slate-600'
+											isSelected || isHover ? 'bg-indigo-600 ring-1 ring-indigo-400' : 'bg-slate-300'
 										}`}
 									/>
 								);
@@ -970,46 +1057,44 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 										width: `${Math.min(100, (containerRef.current.clientWidth / camera.zoom / minimapData.worldWidth) * 100)}%`,
 										height: `${Math.min(100, (containerRef.current.clientHeight / camera.zoom / minimapData.worldHeight) * 100)}%`,
 									}}
-									className="pointer-events-none absolute border border-indigo-400/80 bg-indigo-500/10 rounded-xs"
+									className="pointer-events-none absolute border-2 border-indigo-500 bg-indigo-500/10 rounded-xs"
 								/>
 							)}
 						</div>
-						<div className="pointer-events-none absolute bottom-1 right-2 text-[9px] font-mono text-slate-500">
+						<div className="pointer-events-none absolute bottom-1 right-2 text-[9px] font-mono font-semibold text-slate-400">
 							Radar ER
 						</div>
 					</div>
 				)}
 
-				{/* Guia de Atalhos / Dicas no Canto Inferior Esquerdo */}
-				<div className="absolute bottom-4 left-4 z-20 flex items-center gap-3 rounded-lg border border-slate-800/80 bg-[#12141c]/90 px-3 py-1.5 text-[11px] text-slate-400 backdrop-blur-md">
-					<span>💡 <strong>Arrastar fundo:</strong> Navegar</span>
+				{/* Guia de Atalhos no Canto Inferior Esquerdo */}
+				<div className="absolute bottom-4 left-4 z-20 flex items-center gap-3 rounded-lg border border-slate-200 bg-white/95 px-3 py-1.5 text-[11px] text-slate-600 shadow-sm backdrop-blur-md">
+					<span>💡 <strong>1 clique e segure:</strong> Arrastar tabela</span>
+					<span>•</span>
+					<span><strong>2 cliques:</strong> Editar tabela</span>
 					<span>•</span>
 					<span><strong>Scroll:</strong> Zoom</span>
-					<span>•</span>
-					<span><strong>Arrastar tabela:</strong> Reposicionar</span>
-					<span>•</span>
-					<span><strong>Clique na tabela:</strong> Detalhes & Editar</span>
 				</div>
 			</div>
 
-			{/* POPUP / MODAL DE DETALHES E EDIÇÃO DA TABELA (ao clicar na tabela) */}
+			{/* POPUP / MODAL DE DETALHES E EDIÇÃO DA TABELA (ao dar 2 cliques) — Tema Clean */}
 			{activeModalTable && (
-				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm animate-in fade-in duration-200">
-					<div className="relative flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-slate-700 bg-[#141722] text-slate-100 shadow-2xl overflow-hidden">
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-xs animate-in fade-in duration-150">
+					<div className="relative flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden">
 						{/* Cabeçalho do Modal */}
-						<div className="flex items-center justify-between border-b border-slate-800 bg-[#181b28] px-6 py-4">
+						<div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/90 px-6 py-4">
 							<div className="flex items-center gap-3">
-								<div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+								<div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-100 shadow-2xs">
 									<TableIcon className="h-5 w-5" />
 								</div>
 								<div>
 									<div className="flex items-center gap-2">
-										<h2 className="text-lg font-bold text-white font-mono">{activeModalTable.tableName}</h2>
-										<span className="rounded-md bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-300 border border-slate-700">
+										<h2 className="text-lg font-bold text-slate-900 font-mono">{activeModalTable.tableName}</h2>
+										<span className="rounded-md bg-indigo-50 px-2 py-0.5 font-mono text-xs font-semibold text-indigo-700 border border-indigo-100">
 											Contexto: {activeModalTable.context}
 										</span>
 									</div>
-									<p className="text-xs text-slate-400">
+									<p className="text-xs text-slate-500">
 										{activeModalTable.rowCount.toLocaleString('pt-BR')} registros no PostgreSQL • {editColumns.length} colunas mapeadas no Dicionário da Gideon
 									</p>
 								</div>
@@ -1018,27 +1103,27 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 							<button
 								type="button"
 								onClick={handleCloseTableModal}
-								className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
+								className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition"
 							>
 								<X className="h-5 w-5" />
 							</button>
 						</div>
 
-						{/* Corpo do Modal com Scroll */}
+						{/* Corpo do Modal */}
 						<div className="flex-1 overflow-y-auto p-6 space-y-6">
 							{/* Descrição de Negócio da Tabela */}
 							<div>
-								<label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-									Descrição de Negócio da Tabela para a IA <span className="text-rose-400">*</span>
+								<label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+									Descrição de Negócio da Tabela para a IA <span className="text-rose-500">*</span>
 								</label>
 								<textarea
 									rows={2}
 									value={editTableDescription}
 									onChange={(e) => setEditTableDescription(e.target.value)}
 									placeholder="Explique o propósito desta tabela para a Gideon (ex: Cabeçalho de notas fiscais com tipo de operação, clientes e valores)..."
-									className="w-full rounded-xl border border-slate-700 bg-slate-900/80 p-3 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-sans leading-relaxed"
+									className="w-full rounded-xl border border-slate-300 bg-white p-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-100 leading-relaxed transition"
 								/>
-								<p className="mt-1 text-[11px] text-slate-400">
+								<p className="mt-1 text-[11px] text-slate-500">
 									A Gideon utiliza essa descrição para entender quando consultar esta tabela nas perguntas dos usuários.
 								</p>
 							</div>
@@ -1046,10 +1131,10 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 							{/* Lista de Colunas e Descrições Obrigatórias */}
 							<div>
 								<div className="flex items-center justify-between mb-2">
-									<label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+									<label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
 										Colunas, Descrições Semânticas & Chaves ({editColumns.length})
 									</label>
-									<span className="text-[11px] text-slate-400">
+									<span className="text-[11px] text-slate-500">
 										Marque 1 PK e preencha a descrição de cada campo
 									</span>
 								</div>
@@ -1067,13 +1152,13 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 												key={col.columnName}
 												className={`rounded-xl border p-3 transition-colors ${
 													isPk
-														? 'border-amber-500/40 bg-amber-500/5'
+														? 'border-amber-300 bg-amber-50/50'
 														: col.foreignKeyToTable
-														? 'border-indigo-500/30 bg-indigo-500/5'
-														: 'border-slate-800 bg-slate-900/50'
+														? 'border-indigo-200 bg-indigo-50/30'
+														: 'border-slate-200 bg-slate-50/40'
 												}`}
 											>
-												<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/60 pb-2">
+												<div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/80 pb-2">
 													<div className="flex items-center gap-2">
 														<button
 															type="button"
@@ -1081,30 +1166,30 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 															title={isPk ? 'Coluna atual é a Chave Primária (PK)' : 'Clique para definir esta coluna como PK'}
 															className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold transition ${
 																isPk
-																	? 'bg-amber-500 text-white shadow-xs'
-																	: 'bg-slate-800 text-slate-400 hover:bg-amber-500/20 hover:text-amber-300'
+																	? 'bg-amber-500 text-white shadow-2xs'
+																	: 'bg-white border border-slate-200 text-slate-600 hover:bg-amber-50 hover:text-amber-700 hover:border-amber-300'
 															}`}
 														>
 															<KeyRound className="h-3 w-3" />
 															<span>{isPk ? 'Chave Primária (PK)' : 'Definir PK'}</span>
 														</button>
 
-														<span className="font-mono text-xs font-bold text-slate-200">
+														<span className="font-mono text-xs font-bold text-slate-900">
 															{col.columnName}
 														</span>
-														<span className="font-mono text-[10px] text-slate-500">
+														<span className="font-mono text-[10px] text-slate-400">
 															({col.dataType ? col.dataType.toLowerCase() : 'text'})
 														</span>
 													</div>
 
 													{/* Seletor de Chave Estrangeira (FK) */}
 													<div className="flex items-center gap-1.5">
-														<Link2 className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
-														<span className="text-[11px] text-slate-400">Ligação FK:</span>
+														<Link2 className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+														<span className="text-[11px] font-medium text-slate-600">Ligação FK:</span>
 														<select
 															value={currentFkValue}
 															onChange={(e) => handleUpdateForeignKey(col.columnName, e.target.value)}
-															className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-indigo-500 focus:outline-none"
+															className="rounded-lg border border-slate-300 bg-white px-2 py-1 font-mono text-[11px] text-slate-800 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
 														>
 															<option value="">Sem ligação externa (Coluna simples)</option>
 															{otherTables.flatMap((ot) =>
@@ -1129,37 +1214,37 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 														value={col.description}
 														onChange={(e) => handleUpdateColumnDescription(col.columnName, e.target.value)}
 														placeholder={`Descrição de negócio de ${col.columnName} para a IA (obrigatória)...`}
-														className={`w-full rounded-lg border px-3 py-1.5 text-xs text-slate-200 outline-none transition focus:border-indigo-500 ${
+														className={`w-full rounded-lg border px-3 py-1.5 text-xs text-slate-800 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 ${
 															!col.description?.trim()
-																? 'border-amber-400/60 bg-amber-400/5'
-																: 'border-slate-700 bg-slate-800/70'
+																? 'border-amber-400 bg-amber-50/50'
+																: 'border-slate-300 bg-white'
 														}`}
 													/>
 												</div>
 
-												{/* Amostras Reais do PostgreSQL com botão de injetar com 1 clique */}
+												{/* Amostras Reais do PostgreSQL */}
 												{col.sampleValues && col.sampleValues.length > 0 && (
-													<div className="mt-2 flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-slate-800/40 text-[11px]">
-														<span className="text-slate-400 font-medium">Valores reais no banco:</span>
+													<div className="mt-2 flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-slate-200/60 text-[11px]">
+														<span className="text-slate-500 font-medium">Valores reais no banco:</span>
 														{col.sampleValues.slice(0, 6).map((val) => (
 															<span
 																key={val}
-																className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300 border border-slate-700"
+																className="rounded bg-white px-1.5 py-0.5 font-mono text-[10px] text-emerald-700 border border-slate-200 shadow-2xs"
 															>
 																{val}
 															</span>
 														))}
 														{col.sampleValues.length > 6 && (
-															<span className="text-slate-500 text-[10px]">
+															<span className="text-slate-400 text-[10px]">
 																+{col.sampleValues.length - 6} outros
 															</span>
 														)}
 														<button
 															type="button"
 															onClick={() => handleInjectSampleValues(col.columnName, col.sampleValues)}
-															className="ml-auto inline-flex items-center gap-1 rounded bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 text-[10px] font-semibold text-indigo-300 hover:bg-indigo-500/20 transition"
+															className="ml-auto inline-flex items-center gap-1 rounded bg-indigo-50 border border-indigo-200 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100 transition"
 														>
-															<Sparkles className="h-3 w-3 text-indigo-400" />
+															<Sparkles className="h-3 w-3 text-indigo-600" />
 															<span>Injetar valores na descrição</span>
 														</button>
 													</div>
@@ -1171,16 +1256,16 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 							</div>
 						</div>
 
-						{/* Rodapé de Ações do Modal */}
-						<div className="flex items-center justify-between border-t border-slate-800 bg-[#181b28] px-6 py-4">
-							<span className="text-xs text-slate-400">
+						{/* Rodapé do Modal */}
+						<div className="flex items-center justify-between border-t border-slate-200 bg-slate-50/90 px-6 py-4">
+							<span className="text-xs text-slate-500">
 								Todas as alterações são salvas diretamente no Dicionário de Dados PostgreSQL da Gideon.
 							</span>
 							<div className="flex items-center gap-3">
 								<button
 									type="button"
 									onClick={handleCloseTableModal}
-									className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700 hover:text-white transition"
+									className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
 								>
 									Cancelar
 								</button>
@@ -1188,7 +1273,7 @@ export default function SchemaDiagramExplorer({ token }: SchemaDiagramExplorerPr
 									type="button"
 									onClick={handleSaveTableSchema}
 									disabled={isSavingSchema}
-									className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-600/30 hover:bg-emerald-500 transition disabled:opacity-50"
+									className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 transition disabled:opacity-50"
 								>
 									{isSavingSchema ? (
 										<RefreshCw className="h-4 w-4 animate-spin" />

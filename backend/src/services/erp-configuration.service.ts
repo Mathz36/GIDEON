@@ -1,4 +1,6 @@
 import { PrismaClient, ErpConfiguration as PrismaErpConfig } from '@prisma/client';
+import fs from 'node:fs';
+import path from 'node:path';
 import prismaClient from '../config/prisma';
 import dynamicTableManager, { IDynamicTableManager } from './dynamic-table.manager';
 import erpSyncScheduler, { IErpSyncScheduler, SyncResult } from './erp-sync.scheduler';
@@ -71,6 +73,7 @@ export interface SchemaRelationshipLink {
 export interface SchemaOverviewResponse {
 	tables: SchemaTableOverview[];
 	relationships: SchemaRelationshipLink[];
+	positions?: Record<string, { x: number; y: number }>;
 }
 
 export interface UpdateTableSchemaInput {
@@ -92,6 +95,8 @@ export interface IErpConfigurationService {
 	delete(id: string): Promise<boolean>;
 	syncNow(id: string): Promise<SyncResult>;
 	getSchemaOverview(): Promise<SchemaOverviewResponse>;
+	saveSchemaPositions(positions: Record<string, { x: number; y: number }>): Promise<void>;
+	getSchemaPositions(): Promise<Record<string, { x: number; y: number }>>;
 	updateTableSchema(tableName: string, input: UpdateTableSchemaInput): Promise<SchemaTableOverview>;
 	extractColumnsFromQuery(
 		query: string,
@@ -643,10 +648,40 @@ export class ErpConfigurationService implements IErpConfigurationService {
 			});
 		}
 
+		const positions = await this.getSchemaPositions();
+
 		return {
 			tables: tablesOverview,
 			relationships,
+			positions,
 		};
+	}
+
+	async getSchemaPositions(): Promise<Record<string, { x: number; y: number }>> {
+		try {
+			const filePath = path.resolve(process.cwd(), 'data', 'erp-schema-positions.json');
+			if (fs.existsSync(filePath)) {
+				const raw = await fs.promises.readFile(filePath, 'utf-8');
+				return JSON.parse(raw) as Record<string, { x: number; y: number }>;
+			}
+		} catch (err) {
+			console.warn('[ErpConfigurationService] Falha ao carregar posições salvas do esquema:', err);
+		}
+		return {};
+	}
+
+	async saveSchemaPositions(positions: Record<string, { x: number; y: number }>): Promise<void> {
+		try {
+			const dirPath = path.resolve(process.cwd(), 'data');
+			if (!fs.existsSync(dirPath)) {
+				await fs.promises.mkdir(dirPath, { recursive: true });
+			}
+			const filePath = path.join(dirPath, 'erp-schema-positions.json');
+			await fs.promises.writeFile(filePath, JSON.stringify(positions, null, 2), 'utf-8');
+		} catch (err) {
+			console.error('[ErpConfigurationService] Erro ao salvar posições do esquema:', err);
+			throw err;
+		}
 	}
 
 	/**

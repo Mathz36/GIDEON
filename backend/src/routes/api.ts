@@ -140,6 +140,20 @@ apiRouter.get('/erp/schema', requireAdmin, async (_req, res, next) => {
 	}
 });
 
+apiRouter.post('/erp/schema/positions', requireAdmin, async (req, res, next) => {
+	try {
+		const positions = req.body?.positions;
+		if (!positions || typeof positions !== 'object') {
+			res.status(400).json({ error: 'Objeto de posições inválido.' });
+			return;
+		}
+		await erpConfigurationService.saveSchemaPositions(positions);
+		res.status(200).json({ success: true, message: 'Posições do esquema salvas com sucesso!' });
+	} catch (error) {
+		next(error);
+	}
+});
+
 apiRouter.put('/erp/schema/:tableName', requireAdmin, async (req: Request<{ tableName: string }>, res, next) => {
 	try {
 		const body = req.body ?? {};
