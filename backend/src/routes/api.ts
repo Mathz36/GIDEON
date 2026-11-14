@@ -252,6 +252,11 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 		const aiConfig = await aiConfigurationService.get();
 		const erpIntegrations = await erpConfigurationService.list();
 
+		const companyBusinessRulesPrompt =
+			typeof req.body.systemPrompt === 'string' && req.body.systemPrompt.trim()
+				? req.body.systemPrompt.trim()
+				: aiConfig.systemPrompt;
+
 		let erpContext = '';
 		if (erpIntegrations.length > 0) {
 			erpContext = '\n\nTabelas e Integrações do ERP disponíveis no banco:\n' + erpIntegrations.map((i) => (
@@ -259,7 +264,7 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 			)).join('\n');
 		}
 
-		// Executa pipeline RAG / Text-to-SQL com Query Rewriter e Self-Healing SQL Retry
+		// Executa pipeline RAG / Text-to-SQL com Query Rewriter, Regras de Negócio da Empresa e Self-Healing SQL Retry
 		const lastUserMessage = [...history].reverse().find((m) => m.role === 'user')?.parts.map((p) => p.text).join(' ') ?? '';
 		let ragResult: RagPipelineResult = {
 			noDataFound: true,
@@ -274,7 +279,7 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 		if (lastUserMessage) {
 			emitStatus(2, 'Consultando dados sincronizados do Sankhya ERP...', 'Executando query segura Read-Only no PostgreSQL');
 			try {
-				ragResult = await chatRagService.executeRagPipeline(lastUserMessage, history);
+				ragResult = await chatRagService.executeRagPipeline(lastUserMessage, history, companyBusinessRulesPrompt);
 			} catch (ragErr) {
 				console.warn('[ChatRoute] Erro ao buscar dados reais via RAG:', ragErr);
 			}
@@ -282,11 +287,9 @@ apiRouter.post('/chat', requireAuth, async (req: Request<Record<string, string>,
 
 		const realDatabaseContext = ragResult.contextPrompt ? `\n\n${ragResult.contextPrompt}` : '';
 
-		const baseSystemPrompt = (typeof req.body.systemPrompt === 'string' && req.body.systemPrompt.trim())
-			? req.body.systemPrompt.trim()
-			: aiConfig.systemPrompt;
-
-		const systemPrompt = `${baseSystemPrompt}${erpContext}${realDatabaseContext}`;
+		// Combina as Regras de Negócio da Empresa (editáveis na UI) com as Diretivas Técnicas Internas da Gideon (ocultas no código)
+		const fullBaseSystemPrompt = aiConfigurationService.buildFullSystemPrompt(companyBusinessRulesPrompt);
+		const systemPrompt = `${fullBaseSystemPrompt}${erpContext}${realDatabaseContext}`;
 
 		let parameters: GeminiParameters = {
 			temperature: aiConfig.temperature,

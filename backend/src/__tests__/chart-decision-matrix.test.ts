@@ -173,7 +173,7 @@ describe('Chart Decision Matrix & Visual Prompt Rules Suite', () => {
 
 		const aiConfigService = new AiConfigurationServiceClass(mockPrisma);
 		const aiConfig = await aiConfigService.get();
-		systemPrompt = aiConfig.systemPrompt;
+		systemPrompt = aiConfigService.buildFullSystemPrompt(aiConfig.systemPrompt);
 
 		const mockGemini = {
 			generateSqlQuery: async () => '```sql\nSELECT nome, total FROM erp_vendas LIMIT 5\n```',

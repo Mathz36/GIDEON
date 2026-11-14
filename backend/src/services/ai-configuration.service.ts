@@ -11,13 +11,34 @@ export interface AiConfigurationInput {
 export interface IAiConfigurationService {
 	get(): Promise<PrismaAiConfig>;
 	update(input: AiConfigurationInput): Promise<PrismaAiConfig>;
+	getInternalSystemDirectives(): string;
+	buildFullSystemPrompt(businessRulesPrompt?: string): string;
 }
 
-const DEFAULT_AI_CONFIG: AiConfigurationInput = {
-	systemPrompt: `Você é Gideon, uma inteligência artificial corporativa e consultor executivo de negócios integrado ao banco de dados do ERP.
-Responda sempre em linguagem natural, profissional e consultiva, baseando-se EXCLUSIVAMENTE nos dados reais do banco fornecidos no contexto.
+/**
+ * Regras de Negócio e Orientações da Empresa (Visíveis e Editáveis pelo Administrador na tela "Controle do Gemini").
+ * Não contém detalhes técnicos internos de JSON ou renderização de componentes do sistema.
+ */
+export const DEFAULT_COMPANY_BUSINESS_RULES = `Você é a Gideon, inteligência artificial corporativa e consultora executiva de negócios da empresa, integrada ao banco de dados do ERP.
 
-[DIRETIVA DE VISUALIZAÇÃO DE DADOS]
+REGRAS DE NEGÓCIO E ORIENTAÇÕES DA EMPRESA:
+1. REGRA PADRÃO DE FATURAMENTO (VALOR LÍQUIDO MENOS DEVOLUÇÃO LÍQUIDA):
+   - Sempre que alguém perguntar "quanto faturou", "qual o faturamento", "evolução de vendas" ou "receita", refere-se OBRIGATORIAMENTE ao Valor Líquido de Vendas subtraído da Devolução Líquida de Vendas:
+     Faturamento = Valor Líquido (VENDAS) - Valor Líquido (DEVOLUÇÃO DE VENDAS).
+   - Quando a pessoa quiser saber o Valor Bruto, ela dirá EXPLICITAMENTE "bruto" ou "bruta" (ex: "faturamento bruto", "venda bruta"). Nunca utilize o valor bruto por padrão.
+
+2. REGRA PADRÃO PARA BONIFICAÇÕES E DEVOLUÇÕES:
+   - Sempre que alguém perguntar sobre Bonificação ou Devolução sem especificar "bruto", utilize por padrão o Valor Líquido (valor_liquido).
+   - O Valor Bruto (valor_bruto) só deve ser utilizado para bonificação ou devolução quando solicitado EXPLICITAMENTE pelo usuário (ex: "bonificação bruta", "devolução bruta").
+
+3. COMUNICAÇÃO E POSTURA EXECUTIVA:
+   - Responda sempre em linguagem natural, profissional, objetiva e consultiva, baseando-se exclusivamente nos números reais apurados no ERP.`;
+
+/**
+ * Diretivas Técnicas Internas da Gideon (Ocultas no código — NUNCA exibidas no campo de Regras de Negócio da UI).
+ * Define o protocolo interno de estruturação de gráficos e tabelas JSON (```dashboard) e a Matriz Heurística Visual.
+ */
+export const INTERNAL_GIDEON_SYSTEM_DIRECTIVES = `[DIRETIVA DE VISUALIZAÇÃO DE DADOS]
 Quando o usuário solicitar painéis, gráficos, relatórios tabulares ou quando a resposta contiver dados agregados ou analíticos que sejam melhor compreendidos visualmente, você DEVE gerar os dados estruturados em JSON.
 Insira este JSON no meio da sua resposta, usando EXATAMENTE o seguinte bloco Markdown:
 
@@ -117,11 +138,43 @@ REGRAS ESTRITAS DO JSON:
 1. Formato JSON 100% válido (chaves e valores string obrigatoriamente delimitados por aspas duplas ").
 2. Para gráficos ("type": "bar", "line", "area", "horizontal-bar", "pie"): Use "name" para o eixo/rótulo e "value" para o valor numérico (número puro float/int, nunca formate com "R$" ou símbolos dentro do JSON).
 3. Para tabelas ("type": "table"): O array "data" pode conter objetos com múltiplas chaves livres, que se tornarão as colunas.
-4. Se a consulta não contiver registros ou dados concretos, NUNCA gere o bloco \`\`\`dashboard\`\`\`.`,
+4. Se a consulta não contiver registros ou dados concretos, NUNCA gere o bloco \`\`\`dashboard\`\`\`.`;
+
+const DEFAULT_AI_CONFIG: AiConfigurationInput = {
+	systemPrompt: DEFAULT_COMPANY_BUSINESS_RULES,
 	temperature: 0.1,
 	topP: 0.9,
 	memorySize: 10,
 };
+
+/**
+ * Remove blocos técnicos legados (`[DIRETIVA DE VISUALIZAÇÃO DE DADOS]...`) caso estivessem salvos
+ * no banco de dados antigo, mantendo no campo `systemPrompt` apenas as Regras de Negócio da Empresa.
+ */
+export function sanitizeVisibleBusinessRulesPrompt(rawPrompt: string): string {
+	if (!rawPrompt || !rawPrompt.trim()) {
+		return DEFAULT_COMPANY_BUSINESS_RULES;
+	}
+
+	let cleaned = rawPrompt;
+	const directiveIdx = cleaned.indexOf('[DIRETIVA DE VISUALIZAÇÃO DE DADOS]');
+	if (directiveIdx !== -1) {
+		cleaned = cleaned.slice(0, directiveIdx).trim();
+	}
+
+	// Se após remover o bloco técnico legado restar apenas a frase genérica antiga sem as regras de faturamento líquido,
+	// atualiza para o novo template de Regras de Negócio da Empresa
+	if (
+		!cleaned ||
+		(!cleaned.toLowerCase().includes('devolução') &&
+			!cleaned.toLowerCase().includes('devolucao') &&
+			cleaned.length < 320)
+	) {
+		return DEFAULT_COMPANY_BUSINESS_RULES;
+	}
+
+	return cleaned;
+}
 
 export class AiConfigurationService implements IAiConfigurationService {
 	private readonly prisma: PrismaClient;
@@ -131,16 +184,43 @@ export class AiConfigurationService implements IAiConfigurationService {
 		this.prisma = prisma;
 	}
 
+	public getInternalSystemDirectives(): string {
+		return INTERNAL_GIDEON_SYSTEM_DIRECTIVES;
+	}
+
+	/**
+	 * Combina as Regras de Negócio da Empresa (editáveis pelo Admin) com as Diretivas Técnicas Internas (ocultas no código).
+	 */
+	public buildFullSystemPrompt(businessRulesPrompt?: string): string {
+		const cleanBusinessRules =
+			businessRulesPrompt && businessRulesPrompt.trim()
+				? sanitizeVisibleBusinessRulesPrompt(businessRulesPrompt)
+				: DEFAULT_COMPANY_BUSINESS_RULES;
+
+		return `${cleanBusinessRules}\n\n${INTERNAL_GIDEON_SYSTEM_DIRECTIVES}`;
+	}
+
 	async get(): Promise<PrismaAiConfig> {
 		const existing = await this.prisma.aiConfiguration.findUnique({
 			where: { id: this.configId },
 		});
 
 		if (existing) {
-			return existing;
+			const cleanVisiblePrompt = sanitizeVisibleBusinessRulesPrompt(existing.systemPrompt);
+			if (cleanVisiblePrompt !== existing.systemPrompt && typeof this.prisma.aiConfiguration.update === 'function') {
+				try {
+					return await this.prisma.aiConfiguration.update({
+						where: { id: this.configId },
+						data: { systemPrompt: cleanVisiblePrompt },
+					});
+				} catch {
+					return { ...existing, systemPrompt: cleanVisiblePrompt };
+				}
+			}
+			return { ...existing, systemPrompt: cleanVisiblePrompt };
 		}
 
-		// Se ainda não existir no banco, cria com as configurações padrão
+		// Se ainda não existir no banco, cria com as Regras de Negócio padrão da empresa
 		return this.prisma.aiConfiguration.create({
 			data: {
 				id: this.configId,
@@ -150,17 +230,23 @@ export class AiConfigurationService implements IAiConfigurationService {
 	}
 
 	async update(input: AiConfigurationInput): Promise<PrismaAiConfig> {
+		// Garante que mesmo se enviarem acidentalmente diretivas internas de JSON, apenas as regras de negócio sejam salvas
+		const cleanPrompt = input.systemPrompt.includes('[DIRETIVA DE VISUALIZAÇÃO DE DADOS]')
+			? input.systemPrompt.slice(0, input.systemPrompt.indexOf('[DIRETIVA DE VISUALIZAÇÃO DE DADOS]')).trim() ||
+			  DEFAULT_COMPANY_BUSINESS_RULES
+			: input.systemPrompt.trim();
+
 		return this.prisma.aiConfiguration.upsert({
 			where: { id: this.configId },
 			update: {
-				systemPrompt: input.systemPrompt.trim(),
+				systemPrompt: cleanPrompt,
 				temperature: input.temperature,
 				topP: input.topP,
 				memorySize: input.memorySize,
 			},
 			create: {
 				id: this.configId,
-				systemPrompt: input.systemPrompt.trim(),
+				systemPrompt: cleanPrompt,
 				temperature: input.temperature,
 				topP: input.topP,
 				memorySize: input.memorySize,
@@ -171,4 +257,3 @@ export class AiConfigurationService implements IAiConfigurationService {
 
 export const aiConfigurationService = new AiConfigurationService();
 export default aiConfigurationService;
-

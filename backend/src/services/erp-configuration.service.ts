@@ -397,7 +397,7 @@ export class ErpConfigurationService implements IErpConfigurationService {
 
 		switch (upper) {
 			case 'OPERACAO':
-				return `${pkPrefix}Natureza/tipo da operação comercial da nota fiscal. Valores exatos existentes no banco: ['VENDAS', 'BONIFICAÇÃO', 'DEVOLUÇÃO DE VENDAS', 'DEVOLUÇÃO DE BONIFICAÇÃO']. REGRA CRÍTICA: Quando o usuário pedir faturamento ou vendas, filtre OBRIGATORIAMENTE WHERE operacao = 'VENDAS' (não misture bonificações nem devoluções no faturamento de vendas).`;
+				return `${pkPrefix}Natureza/tipo da operação comercial da nota fiscal. Valores exatos existentes no banco: ['VENDAS', 'BONIFICAÇÃO', 'DEVOLUÇÃO DE VENDAS', 'DEVOLUÇÃO DE BONIFICAÇÃO']. REGRA CRÍTICA: Para listagem de vendas use WHERE operacao = 'VENDAS'; quando o usuário pedir faturamento/quanto faturou, calcule o valor líquido de 'VENDAS' menos 'DEVOLUÇÃO DE VENDAS' (WHERE operacao IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS')).`;
 			case 'TIPO_MOVIMENTO':
 				return `${pkPrefix}Sentido fiscal da movimentação da nota. Valores exatos no banco: ['SAIDA', 'ENTRADA'] ('SAIDA' para vendas/bonificações e 'ENTRADA' para devoluções).`;
 			case 'NOTA_FISCAL':
@@ -407,9 +407,9 @@ export class ErpConfigurationService implements IErpConfigurationService {
 			case 'NUM_PEDIDO':
 				return `${pkPrefix}Número do pedido de venda original que deu origem à nota fiscal.`;
 			case 'VALOR_LIQUIDO':
-				return `${pkPrefix}Valor financeiro líquido da nota fiscal em R$ (armazenado como texto numérico). Para somar faturamento líquido, use SUM(CAST(valor_liquido AS NUMERIC)).`;
+				return `${pkPrefix}Valor financeiro líquido da nota fiscal em R$ (padrão obrigatório para faturamento, vendas, devoluções e bonificações quando o usuário não pedir explicitamente 'bruto'). Para somar faturamento líquido, use SUM(CAST(valor_liquido AS NUMERIC)) abatendo 'DEVOLUÇÃO DE VENDAS'.`;
 			case 'VALOR_BRUTO':
-				return `${pkPrefix}Valor financeiro bruto da nota fiscal em R$ antes de descontos. Para somar faturamento bruto, use SUM(CAST(valor_bruto AS NUMERIC)).`;
+				return `${pkPrefix}Valor financeiro bruto da nota fiscal em R$ antes de descontos. Utilize SOMENTE quando o usuário pedir EXPLICITAMENTE 'bruto' ou 'bruta' (ex: faturamento bruto, bonificação bruta), usando SUM(CAST(valor_bruto AS NUMERIC)).`;
 			case 'DATA_EMISSAO':
 				return `${pkPrefix}Data e hora de emissão da nota fiscal gravada no formato ISO 'YYYY-MM-DD HH24:MI:SS' (ex: '2026-10-05 00:00:00'). Para filtrar períodos, ordenar ou agrupar por dia/mês, use OBRIGATORIAMENTE CAST(data_emissao AS TIMESTAMP) ou CAST(data_emissao AS DATE).`;
 			case 'COD_CLIENTE':

@@ -191,6 +191,23 @@ export function sanitizeAndValidateGeneratedSql(
 	let sanitized = sql.trim();
 	const appliedFixes: string[] = [];
 
+	const normQuestion = (question || '')
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase();
+
+	// 0. Regra de Negócio: Padrão = Valor Líquido (só usa valor_bruto quando o usuário pedir explicitamente "bruto"/"bruta")
+	const explicitlyAsksForBruto = /\bbrut[oa]s?\b/i.test(normQuestion);
+	const hasBothLiquidoAndBruto =
+		/\bvalor_liquido\b/i.test(sanitized) && /\bvalor_bruto\b/i.test(sanitized);
+
+	if (!explicitlyAsksForBruto && !hasBothLiquidoAndBruto && /\bvalor_bruto\b/i.test(sanitized)) {
+		sanitized = sanitized.replace(/\bvalor_bruto\b/gi, 'valor_liquido');
+		appliedFixes.push(
+			'Regra de negócio aplicada: valor_bruto convertido para valor_liquido (usuário não solicitou valor bruto explicitamente)',
+		);
+	}
+
 	// 1. Auto-Wrap de colunas numéricas TEXT dentro de funções de agregação: SUM(col), AVG(col), MIN(col), MAX(col)
 	const aggRegex = /\b(SUM|AVG|MIN|MAX)\s*\(\s*(DISTINCT\s+)?([a-zA-Z0-9_."]+)\s*\)/gi;
 	sanitized = sanitized.replace(aggRegex, (fullMatch, funcName: string, distinctPart: string | undefined, colExpr: string) => {
@@ -255,12 +272,25 @@ export function sanitizeAndValidateGeneratedSql(
 		}
 	}
 
-	// 3. Invariante de Negócio em erp_nota_fiscal: garante filtro operacao = 'VENDAS' para consultas de faturamento/vendas
+	// 3. Invariante de Negócio em erp_nota_fiscal:
+	//    - Garante filtro operacao = 'VENDAS' (ou IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS')) quando omitido
+	//    - Quando a pergunta pede "faturamento" / "quanto faturou" com SUM(CAST(valor_liquido AS NUMERIC)),
+	//      aplica a regra: Faturamento = Valor Líquido (VENDAS) - Valor Líquido (DEVOLUÇÃO DE VENDAS)
 	if (shouldEnforceVendasOperationFilter(sanitized, question)) {
 		const injected = injectVendasOperationFilter(sanitized);
 		if (injected !== sanitized) {
 			sanitized = injected;
 			appliedFixes.push(`Invariante de negócio aplicada: filtro operacao = 'VENDAS' injetado em erp_nota_fiscal`);
+		}
+	}
+
+	if (shouldEnforceNetBillingMinusReturns(sanitized, normQuestion)) {
+		const netAdjusted = upgradeToNetBillingMinusReturns(sanitized);
+		if (netAdjusted !== sanitized) {
+			sanitized = netAdjusted;
+			appliedFixes.push(
+				`Regra de Faturamento Líquido aplicada: Valor Líquido (VENDAS) - Devolução Líquida (DEVOLUÇÃO DE VENDAS)`,
+			);
 		}
 	}
 
@@ -372,4 +402,55 @@ function injectVendasOperationFilter(sql: string): string {
 
 	// Caso 3: Query simples sem WHERE, GROUP BY, ORDER BY ou LIMIT
 	return `${sql.replace(/;+\s*$/, '')} WHERE ${condition}`;
+}
+
+function shouldEnforceNetBillingMinusReturns(sql: string, normQuestion: string): boolean {
+	if (!/\berp_nota_fiscal\b/i.test(sql)) {
+		return false;
+	}
+	// Se a query já trata DEVOLUÇÃO DE VENDAS ou já possui CASE WHEN na soma, não modifica
+	if (/DEVOLU[ÇC][ÃA]O\s+DE\s+VENDAS/i.test(sql) || /\bSUM\s*\(\s*CASE\b/i.test(sql)) {
+		return false;
+	}
+	// Se a query consulta simultaneamente múltiplas métricas brutas/líquidas em testes de agregação simples, preserva
+	if (/\bAVG\s*\(/i.test(sql) && /\bMAX\s*\(/i.test(sql)) {
+		return false;
+	}
+	// Só aplica quando há SUM(CAST(...valor_liquido... AS NUMERIC)) e a pergunta pede faturamento / quanto faturou
+	const hasSumValor = /\bSUM\s*\(\s*CAST\s*\(\s*[a-zA-Z0-9_."]*valor_(?:liquido|bruto)\s+AS\s+NUMERIC\s*\)\s*\)/i.test(sql);
+	const asksForBilling = /\b(fatur|faturou|faturamento)\w*/i.test(normQuestion);
+	const asksForBonificacaoOrDevolucaoOnly = /\b(bonific|brind|troc)\w*/i.test(normQuestion);
+
+	return hasSumValor && asksForBilling && !asksForBonificacaoOrDevolucaoOnly;
+}
+
+function upgradeToNetBillingMinusReturns(sql: string): string {
+	const aliasMatch = sql.match(
+		/\b(?:FROM|JOIN)\s+"?erp_nota_fiscal"?(?:\s+AS)?\s+([a-zA-Z0-9_]+)\b/i,
+	);
+	const reservedSqlWords = new Set([
+		'where', 'group', 'order', 'limit', 'inner', 'left', 'right', 'full', 'join', 'on', 'having', 'union', 'offset',
+	]);
+
+	let aliasPrefix = '';
+	if (aliasMatch && aliasMatch[1] && !reservedSqlWords.has(aliasMatch[1].toLowerCase())) {
+		aliasPrefix = `${aliasMatch[1]}.`;
+	}
+
+	const opCol = `${aliasPrefix}operacao`;
+
+	// 1. Converte SUM(CAST(col AS NUMERIC)) para SUM(CASE WHEN operacao = 'VENDAS' THEN ... WHEN operacao = 'DEVOLUÇÃO DE VENDAS' THEN -... ELSE 0 END)
+	let updated = sql.replace(
+		/\bSUM\s*\(\s*CAST\s*\(\s*([a-zA-Z0-9_."]*valor_(?:liquido|bruto))\s+AS\s+NUMERIC\s*\)\s*\)/gi,
+		(_full, colIdentifier: string) =>
+			`SUM(CASE WHEN ${opCol} = 'VENDAS' THEN CAST(${colIdentifier} AS NUMERIC) WHEN ${opCol} = 'DEVOLUÇÃO DE VENDAS' THEN -CAST(${colIdentifier} AS NUMERIC) ELSE 0 END)`,
+	);
+
+	// 2. Converte WHERE operacao = 'VENDAS' para WHERE operacao IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS')
+	updated = updated.replace(
+		new RegExp(`\\b(${aliasPrefix.replace('.', '\\.')}?operacao)\\s*=\\s*'VENDAS'`, 'gi'),
+		`$1 IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS')`,
+	);
+
+	return updated;
 }

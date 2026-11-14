@@ -159,20 +159,20 @@ export default function AdminAI() {
 					<div>
 						<div className="flex items-center justify-between">
 							<label className="block text-sm font-semibold text-slate-800" htmlFor="system-prompt">
-								System Prompt / Regras de Negócio
+								System Prompt / Regras de Negócio da Empresa
 							</label>
-							<span className="text-xs text-slate-400">Instruções mestras para a IA</span>
+							<span className="text-xs text-slate-400">Orientações corporativas da empresa para a Gideon</span>
 						</div>
 						<textarea
 							id="system-prompt"
 							value={systemPrompt}
 							onChange={(event) => setSystemPrompt(event.target.value)}
-							placeholder="Você é o assistente inteligente Gideon. Siga estritamente as regras de negócio..."
-							rows={8}
+							placeholder="Defina as regras de negócio da empresa (ex: cálculo de faturamento líquido abatendo devoluções, regras de bonificação, postura executiva)..."
+							rows={12}
 							className="mt-2 block w-full resize-y rounded-xl border border-slate-300 p-3.5 font-mono text-sm leading-6 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
 						/>
 						<p className="mt-2 text-xs text-slate-500">
-							Defina o tom de voz, regras de segurança, restrições e diretrizes de resposta.
+							Defina aqui apenas as regras e orientações de negócio da empresa com a Gideon. Os protocolos técnicos internos (interpretação de JSON, matriz de gráficos e segurança SQL) permanecem ocultos e gerenciados automaticamente no núcleo do sistema.
 						</p>
 					</div>
 

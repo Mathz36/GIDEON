@@ -158,6 +158,7 @@ export class ChatRagService {
 	async executeRagPipeline(
 		userQuestion: string,
 		history?: Array<{ role: string; parts: Array<{ text: string }> }>,
+		companyBusinessRules?: string,
 	): Promise<RagPipelineResult> {
 		if (!userQuestion || !userQuestion.trim()) {
 			return {
@@ -177,6 +178,11 @@ export class ChatRagService {
 					? await this.rewriteQueryWithHistory(userQuestion, history)
 					: userQuestion.trim();
 
+			const businessRulesSection =
+				companyBusinessRules && companyBusinessRules.trim()
+					? `\n3. REGRAS DE NEGÓCIO E ORIENTAÇÕES DA EMPRESA:\n${companyBusinessRules.trim()}\n`
+					: '';
+
 			const pipelineResult = await ragSqlPipeline.execute({
 				tenantId: 'default',
 				question: effectiveQuestion,
@@ -195,17 +201,19 @@ export class ChatRagService {
      * Mês específico (setembro/2026): CAST(data_emissao AS TIMESTAMP) >= DATE '2026-09-01' AND CAST(data_emissao AS TIMESTAMP) < DATE '2026-10-01'
      * Mês anterior: CAST(data_emissao AS TIMESTAMP) >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') AND CAST(data_emissao AS TIMESTAMP) < DATE_TRUNC('month', CURRENT_DATE)
      * Evolução diária dentro de um mês (ex: evolução do faturamento por dia em outubro/2026):
-       SELECT TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'DD/MM') AS dia, SUM(CAST(valor_liquido AS NUMERIC)) AS faturamento_total
+       SELECT TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'DD/MM') AS dia, SUM(CASE WHEN operacao = 'VENDAS' THEN CAST(valor_liquido AS NUMERIC) WHEN operacao = 'DEVOLUÇÃO DE VENDAS' THEN -CAST(valor_liquido AS NUMERIC) ELSE 0 END) AS faturamento_total
        FROM "erp_nota_fiscal"
-       WHERE operacao = 'VENDAS' AND CAST(data_emissao AS TIMESTAMP) >= DATE '2026-10-01' AND CAST(data_emissao AS TIMESTAMP) < DATE '2026-11-01'
+       WHERE operacao IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS') AND CAST(data_emissao AS TIMESTAMP) >= DATE '2026-10-01' AND CAST(data_emissao AS TIMESTAMP) < DATE '2026-11-01'
        GROUP BY TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'DD/MM')
        ORDER BY MIN(CAST(data_emissao AS TIMESTAMP)) ASC
        LIMIT 31
      * Agrupar por mês: TO_CHAR(CAST(data_emissao AS TIMESTAMP), 'MM/YYYY') AS mes ... ORDER BY MIN(CAST(data_emissao AS TIMESTAMP)) ASC
 2. TRATAMENTO DE VALORES NUMÉRICOS, OPERAÇÕES E ENGENHARIA DE EIXOS:
    - Colunas numéricas armazenadas como TEXT (ex: valor_bruto, valor_liquido, quantidade, peso) DEVEM receber CAST(coluna AS NUMERIC) ao usar SUM, AVG ou comparações numéricas (> ou <).
-   - REGRA CRÍTICA DE OPERAÇÃO COMERCIAL (COLUNA "operacao" EM "erp_nota_fiscal"): A coluna "operacao" possui os valores 'VENDAS', 'BONIFICAÇÃO', 'DEVOLUÇÃO DE VENDAS' e 'DEVOLUÇÃO DE BONIFICAÇÃO'. Sempre que o usuário perguntar sobre FATURAMENTO, VENDAS ou RECEITA, filtre OBRIGATORIAMENTE WHERE operacao = 'VENDAS' (não some bonificações nem devoluções junto com vendas, a menos que o usuário peça explicitamente bonificações ou devoluções).
-   - PROIBIÇÃO CRÍTICA DE EIXOS: NUNCA use "nota_fiscal", "id", "pedido_origem" ou "cod_*" como substituto de data/dia no eixo X (ex: PROIBIDO fazer SELECT nota_fiscal AS dia). Para evolução diária, agrupe SEMPRE pela coluna de data formatada ('DD/MM'). Para faturamento/valor financeiro, some SEMPRE "valor_liquido" (ou "valor_bruto"), NUNCA "quantidade".`,
+   - REGRA PADRÃO DE FATURAMENTO (VALOR LÍQUIDO - DEVOLUÇÃO LÍQUIDA): Sempre que alguém perguntar "quanto faturou", "faturamento", "vendas" ou "receita" (sem pedir explicitamente "bruto"), utilize OBRIGATORIAMENTE a coluna "valor_liquido" subtraindo as devoluções de vendas:
+     SUM(CASE WHEN operacao = 'VENDAS' THEN CAST(valor_liquido AS NUMERIC) WHEN operacao = 'DEVOLUÇÃO DE VENDAS' THEN -CAST(valor_liquido AS NUMERIC) ELSE 0 END) com WHERE operacao IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS').
+   - REGRA DO VALOR BRUTO (SOMENTE QUANDO EXPLÍCITO): Só utilize "valor_bruto" quando o usuário pedir EXPLICITAMENTE "bruto" ou "bruta" (ex: "faturamento bruto", "bonificação bruta"). O mesmo vale para bonificação: por padrão use "valor_liquido" e só use "valor_bruto" se pedir explicitamente "bruto".
+   - PROIBIÇÃO CRÍTICA DE EIXOS: NUNCA use "nota_fiscal", "id", "pedido_origem" ou "cod_*" como substituto de data/dia no eixo X (ex: PROIBIDO fazer SELECT nota_fiscal AS dia). Para evolução diária, agrupe SEMPRE pela coluna de data formatada ('DD/MM'). Para faturamento/valor financeiro, some SEMPRE "valor_liquido" (ou "valor_bruto" quando explícito), NUNCA "quantidade".${businessRulesSection}`,
 			});
 
 			const allowedTables = pipelineResult.schemaGraph.allTables.map((t) =>

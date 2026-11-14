@@ -550,3 +550,32 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/src/services/response-reviewer.service.ts`
   - `backend/src/__tests__/rag-akita-hardening.test.ts`
   - `MEMORY_PALACE.md`
+
+
+### [2026-11-14] — Separação de Diretivas Internas vs Regras de Negócio da Empresa & Regra Canônica de Faturamento Líquido (Vendas - Devoluções)
+- **Agentes Responsáveis:** `ai-specialist`, `backend`, `frontend`, `planner`
+- **Tipo:** `feat` / `refactor` / `test`
+- **Contexto & Motivação:**
+  O usuário solicitou duas melhorias estruturais de governança:
+  1. **Regra Canônica de Faturamento e Bonificação:** Sempre que alguém perguntar *"quanto faturou"* / *"faturamento"*, refere-se obrigatoriamente ao **Valor Líquido de Vendas subtraído da Devolução Líquida de Vendas** (`Valor Líquido (VENDAS) - Valor Líquido (DEVOLUÇÃO DE VENDAS)`). Quando a pessoa quiser saber o **Valor Bruto**, ela dirá **explicitamente** `"bruto"` ou `"bruta"` (aplicando-se a mesma regra para bonificação: padrão líquido, e bruto apenas quando explícito).
+  2. **Isolamento de Instruções Técnicas Internas vs Regras de Negócio na UI:** Na tela **Controle do Gemini -> System Prompt / Regras de Negócio**, devem ficar visíveis apenas as regras e orientações corporativas da empresa com a Gideon, enquanto todas as diretivas técnicas internas da Gideon (como interpretar/gerar JSON ````dashboard````, matriz heurística de gráficos, etc.) ficam ocultas internamente no código.
+- **Implementações Realizadas:**
+  1. **Separação Limpa em `AiConfigurationService` (`ai-configuration.service.ts`, `api.ts`, `AdminAI.tsx`):**
+     - `DEFAULT_COMPANY_BUSINESS_RULES` passa a conter exclusivamente as regras e orientações de negócio da empresa (visível e editável pelo Admin na UI).
+     - `INTERNAL_GIDEON_SYSTEM_DIRECTIVES` mantém ocultas no código todas as diretivas técnicas de estruturação JSON ````dashboard```` e a Matriz Heurística Visual.
+     - `sanitizeVisibleBusinessRulesPrompt` migra automaticamente o registro existente no PostgreSQL (`ai_configurations`), removendo o bloco técnico legado da UI e mantendo apenas as regras de negócio da empresa.
+     - `buildFullSystemPrompt` acopla internamente as regras da empresa + diretivas técnicas ocultas no momento da inferência, e `chatRagService.executeRagPipeline` também recebe `companyBusinessRulesPrompt` para que o gerador SQL obedeça a qualquer nova orientação cadastrada na tela.
+  2. **Enforcement Determinístico no Sanitizador SQL (`sql-ast-validator.ts`, `chat-rag.service.ts`, `build-sql-generation-prompt.use-case.ts`):**
+     - Quando o usuário não pede explicitamente `"bruto"`/`"bruta"`, `sanitizeAndValidateGeneratedSql` converte automaticamente referências indevidas de `valor_bruto` para `valor_liquido`.
+     - Em consultas de faturamento sobre `erp_nota_fiscal`, converte automaticamente `SUM(CAST(valor_liquido AS NUMERIC))` para `SUM(CASE WHEN operacao = 'VENDAS' THEN CAST(valor_liquido AS NUMERIC) WHEN operacao = 'DEVOLUÇÃO DE VENDAS' THEN -CAST(valor_liquido AS NUMERIC) ELSE 0 END)` com `WHERE operacao IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS')`.
+- **Arquivos Impactados:**
+  - `backend/src/services/ai-configuration.service.ts`
+  - `backend/src/utils/sql-ast-validator.ts`
+  - `backend/src/services/chat-rag.service.ts`
+  - `backend/src/modules/data-dictionary/application/use-cases/build-sql-generation-prompt.use-case.ts`
+  - `backend/src/services/erp-configuration.service.ts`
+  - `backend/src/routes/api.ts`
+  - `frontend/src/pages/AdminAI.tsx`
+  - `backend/src/__tests__/chart-decision-matrix.test.ts`
+  - `backend/src/__tests__/rag-akita-hardening.test.ts`
+  - `MEMORY_PALACE.md`

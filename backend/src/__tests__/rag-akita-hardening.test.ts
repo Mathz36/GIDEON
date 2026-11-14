@@ -12,6 +12,7 @@ import {
 import { ExtractKeywordsUseCase } from '../modules/data-dictionary/application/use-cases/extract-keywords.use-case';
 import { ChatRagService } from '../services/chat-rag.service';
 import { ResponseReviewerService } from '../services/response-reviewer.service';
+import { AiConfigurationService } from '../services/ai-configuration.service';
 
 const STANDARD_ERP_COLUMNS = [
 	'id',
@@ -174,7 +175,7 @@ describe('Blindagem Determinística RAG (4 Camadas - Metodologia Fábio Akita)',
 			);
 		});
 
-		it('deve injetar deterministicamente operacao = \'VENDAS\' em consultas de faturamento sobre erp_nota_fiscal quando omitido pelo LLM', () => {
+		it('deve aplicar a Regra de Faturamento Líquido (VENDAS - DEVOLUÇÃO DE VENDAS) em consultas de faturamento sobre erp_nota_fiscal', () => {
 			const rawSqlWithoutFilter = `SELECT TO_CHAR(CAST(nf.data_emissao AS TIMESTAMP), 'DD/MM') AS dia, SUM(CAST(nf.valor_liquido AS NUMERIC)) AS faturamento_total FROM erp_nota_fiscal nf GROUP BY dia ORDER BY MIN(CAST(nf.data_emissao AS TIMESTAMP)) ASC`;
 
 			const result = sanitizeAndValidateGeneratedSql(
@@ -184,9 +185,55 @@ describe('Blindagem Determinística RAG (4 Camadas - Metodologia Fábio Akita)',
 
 			assert.equal(result.wasModified, true);
 			assert.ok(
-				result.sql.includes("WHERE nf.operacao = 'VENDAS' GROUP BY"),
-				`Esperava injeção de nf.operacao = 'VENDAS', recebido: ${result.sql}`,
+				result.sql.includes("WHERE nf.operacao IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS') GROUP BY"),
+				`Esperava filtro IN ('VENDAS', 'DEVOLUÇÃO DE VENDAS'), recebido: ${result.sql}`,
 			);
+			assert.ok(
+				result.sql.includes("WHEN nf.operacao = 'DEVOLUÇÃO DE VENDAS' THEN -CAST(nf.valor_liquido AS NUMERIC)"),
+				`Esperava subtração de DEVOLUÇÃO DE VENDAS no SUM, recebido: ${result.sql}`,
+			);
+		});
+
+		it('deve converter valor_bruto para valor_liquido por padrão, exceto quando o usuário pedir explicitamente "bruto"', () => {
+			const sqlWithBruto = `SELECT SUM(CAST(valor_bruto AS NUMERIC)) AS total FROM erp_nota_fiscal WHERE operacao = 'BONIFICAÇÃO'`;
+
+			// Sem mencionar "bruto" -> converte para valor_liquido
+			const resDefault = sanitizeAndValidateGeneratedSql(
+				sqlWithBruto,
+				'Qual foi o valor de bonificação neste mês?',
+			);
+			assert.equal(resDefault.wasModified, true);
+			assert.ok(resDefault.sql.includes('valor_liquido'));
+			assert.ok(!resDefault.sql.includes('valor_bruto'));
+
+			// Mencionando "bruta" explicitamente -> preserva valor_bruto
+			const resExplicitBruto = sanitizeAndValidateGeneratedSql(
+				sqlWithBruto,
+				'Qual foi o valor de bonificação bruta neste mês?',
+			);
+			assert.ok(resExplicitBruto.sql.includes('valor_bruto'));
+		});
+
+		it('deve manter visível no System Prompt da UI apenas as Regras de Negócio da Empresa, ocultando diretivas internas de JSON no código', async () => {
+			const mockPrisma: any = {
+				aiConfiguration: {
+					findUnique: async () => null,
+					create: async ({ data }: any) => data,
+				},
+			};
+			const service = new AiConfigurationService(mockPrisma);
+			const config = await service.get();
+
+			// Na UI (config.systemPrompt), ficam apenas as regras de negócio da empresa
+			assert.ok(config.systemPrompt.includes('Valor Líquido (VENDAS) - Valor Líquido (DEVOLUÇÃO DE VENDAS)'));
+			assert.ok(!config.systemPrompt.includes('[DIRETIVA DE VISUALIZAÇÃO DE DADOS]'));
+			assert.ok(!config.systemPrompt.includes('```dashboard'));
+
+			// Internamente no código (buildFullSystemPrompt), as diretivas técnicas de JSON são acopladas
+			const fullPrompt = service.buildFullSystemPrompt(config.systemPrompt);
+			assert.ok(fullPrompt.includes('Valor Líquido (VENDAS) - Valor Líquido (DEVOLUÇÃO DE VENDAS)'));
+			assert.ok(fullPrompt.includes('[DIRETIVA DE VISUALIZAÇÃO DE DADOS]'));
+			assert.ok(fullPrompt.includes('```dashboard'));
 		});
 
 		it('NÃO deve injetar operacao = \'VENDAS\' quando o usuário perguntar sobre devoluções, bonificações ou todas as operações', () => {
