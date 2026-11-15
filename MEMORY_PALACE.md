@@ -315,6 +315,25 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/src/__tests__/database-bootstrap.test.ts`
   - `MEMORY_PALACE.md`
 
+### [2026-11-15] — Containerização de Produção Segura (Docker & Docker Compose Multi-Stage)
+- **Agente:** Planner & DevOps / Full-Stack Squad
+- **Contexto & Implementação:**
+  - Configurada stack profissional completa para deploy com 1 comando em produção (`docker compose up -d --build`) sem necessidade de conta Docker, eliminando 100% de erros de instalação de dependências ou incompatibilidade de SO.
+  - `backend/Dockerfile`: Multi-stage build com `node:20-bookworm-slim`, compilação TypeScript, geração automática do Prisma Client e execução segura sem `tsx/watch`.
+  - `frontend/Dockerfile` & `frontend/nginx.conf`: Multi-stage build com `node:20-alpine`, servindo assets estáticos minificados com Nginx de alta performance, compressão Gzip e proxy reverso `/api` configurado para streaming SSE em tempo real sem buffering.
+  - `docker-compose.yml`: Orquestração declarativa dos 3 serviços (`postgres` com volume persistente `gideon_postgres_data` e healthcheck, `backend` aguardando postgres estar saudável, e `frontend` escutando na porta `3090:80`).
+  - Adicionado gatilho `"postinstall": "prisma generate"` em `backend/package.json`.
+- **Arquivos Afetados:**
+  - `docker-compose.yml`
+  - `backend/Dockerfile`
+  - `backend/.dockerignore`
+  - `backend/package.json`
+  - `backend/.env.example`
+  - `frontend/Dockerfile`
+  - `frontend/nginx.conf`
+  - `frontend/.dockerignore`
+  - `MEMORY_PALACE.md`
+
 
 ### [2026-11-12] — Transição do Banco de Dados para PostgreSQL Local
 - **Agente Responsável:** `planner` (Tech Lead)
@@ -424,6 +443,25 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/package.json`
   - `backend/prisma/migrations/20261115180000_core_platform_tables/migration.sql`
   - `backend/src/__tests__/database-bootstrap.test.ts`
+  - `MEMORY_PALACE.md`
+
+### [2026-11-15] — Containerização de Produção Segura (Docker & Docker Compose Multi-Stage)
+- **Agente:** Planner & DevOps / Full-Stack Squad
+- **Contexto & Implementação:**
+  - Configurada stack profissional completa para deploy com 1 comando em produção (`docker compose up -d --build`) sem necessidade de conta Docker, eliminando 100% de erros de instalação de dependências ou incompatibilidade de SO.
+  - `backend/Dockerfile`: Multi-stage build com `node:20-bookworm-slim`, compilação TypeScript, geração automática do Prisma Client e execução segura sem `tsx/watch`.
+  - `frontend/Dockerfile` & `frontend/nginx.conf`: Multi-stage build com `node:20-alpine`, servindo assets estáticos minificados com Nginx de alta performance, compressão Gzip e proxy reverso `/api` configurado para streaming SSE em tempo real sem buffering.
+  - `docker-compose.yml`: Orquestração declarativa dos 3 serviços (`postgres` com volume persistente `gideon_postgres_data` e healthcheck, `backend` aguardando postgres estar saudável, e `frontend` escutando na porta `3090:80`).
+  - Adicionado gatilho `"postinstall": "prisma generate"` em `backend/package.json`.
+- **Arquivos Afetados:**
+  - `docker-compose.yml`
+  - `backend/Dockerfile`
+  - `backend/.dockerignore`
+  - `backend/package.json`
+  - `backend/.env.example`
+  - `frontend/Dockerfile`
+  - `frontend/nginx.conf`
+  - `frontend/.dockerignore`
   - `MEMORY_PALACE.md`
 
 
@@ -835,4 +873,23 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/package.json`
   - `backend/prisma/migrations/20261115180000_core_platform_tables/migration.sql`
   - `backend/src/__tests__/database-bootstrap.test.ts`
+  - `MEMORY_PALACE.md`
+
+### [2026-11-15] — Containerização de Produção Segura (Docker & Docker Compose Multi-Stage)
+- **Agente:** Planner & DevOps / Full-Stack Squad
+- **Contexto & Implementação:**
+  - Configurada stack profissional completa para deploy com 1 comando em produção (`docker compose up -d --build`) sem necessidade de conta Docker, eliminando 100% de erros de instalação de dependências ou incompatibilidade de SO.
+  - `backend/Dockerfile`: Multi-stage build com `node:20-bookworm-slim`, compilação TypeScript, geração automática do Prisma Client e execução segura sem `tsx/watch`.
+  - `frontend/Dockerfile` & `frontend/nginx.conf`: Multi-stage build com `node:20-alpine`, servindo assets estáticos minificados com Nginx de alta performance, compressão Gzip e proxy reverso `/api` configurado para streaming SSE em tempo real sem buffering.
+  - `docker-compose.yml`: Orquestração declarativa dos 3 serviços (`postgres` com volume persistente `gideon_postgres_data` e healthcheck, `backend` aguardando postgres estar saudável, e `frontend` escutando na porta `3090:80`).
+  - Adicionado gatilho `"postinstall": "prisma generate"` em `backend/package.json`.
+- **Arquivos Afetados:**
+  - `docker-compose.yml`
+  - `backend/Dockerfile`
+  - `backend/.dockerignore`
+  - `backend/package.json`
+  - `backend/.env.example`
+  - `frontend/Dockerfile`
+  - `frontend/nginx.conf`
+  - `frontend/.dockerignore`
   - `MEMORY_PALACE.md`
