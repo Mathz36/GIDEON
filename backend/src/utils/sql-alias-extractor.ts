@@ -17,16 +17,53 @@ export function extractSqlSelectAliases(query: string): string[] {
 		return [];
 	}
 
-	// Localiza o primeiro SELECT de nível superior e o FROM correspondente de nível 0
-	const selectMatch = /^\s*SELECT\b(?:\s+DISTINCT\b)?/i.exec(withoutComments);
-	if (!selectMatch) {
-		return [];
-	}
-
-	const startIdx = selectMatch[0].length;
+	// Localiza o SELECT principal de nível 0 (fora de CTEs como WITH ... AS (...) ou parênteses)
+	let startIdx = -1;
 	let depth = 0;
 	let inSingleQuote = false;
+
+	for (let i = 0; i < withoutComments.length; i++) {
+		const ch = withoutComments[i];
+
+		if (ch === "'") {
+			if (inSingleQuote && withoutComments[i + 1] === "'") {
+				i += 1;
+				continue;
+			}
+			inSingleQuote = !inSingleQuote;
+			continue;
+		}
+
+		if (inSingleQuote) continue;
+
+		if (ch === '(') {
+			depth += 1;
+		} else if (ch === ')') {
+			depth = Math.max(0, depth - 1);
+		} else if (depth === 0) {
+			const sub = withoutComments.slice(i);
+			if (/^SELECT\b/i.test(sub)) {
+				const prevChar = i > 0 ? withoutComments[i - 1] : ' ';
+				if (/[\s);]/.test(prevChar)) {
+					const match = /^SELECT\b(?:\s+DISTINCT\b)?/i.exec(sub);
+					if (match) {
+						startIdx = i + match[0].length;
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	if (startIdx === -1) {
+		const fallback = /\bSELECT\b(?:\s+DISTINCT\b)?/i.exec(withoutComments);
+		if (!fallback) return [];
+		startIdx = fallback.index + fallback[0].length;
+	}
+
 	let fromIdx = -1;
+	depth = 0;
+	inSingleQuote = false;
 
 	for (let i = startIdx; i < withoutComments.length; i++) {
 		const ch = withoutComments[i];
@@ -57,7 +94,8 @@ export function extractSqlSelectAliases(query: string): string[] {
 	}
 
 	if (fromIdx === -1) {
-		return [];
+		// Queries sem FROM (ex: SELECT 1 AS id, 'teste' AS nome)
+		fromIdx = withoutComments.length;
 	}
 
 	const selectClause = withoutComments.slice(startIdx, fromIdx).trim();
@@ -106,32 +144,68 @@ export function extractSqlSelectAliases(query: string): string[] {
 
 	const aliases: string[] = [];
 	const seenUpper = new Set<string>();
-	const reservedEndTokens = new Set(['END', 'NULL', 'TRUE', 'FALSE', 'DISTINCT', 'ALL', 'ASC', 'DESC']);
+	const reservedTokens = new Set([
+		'END',
+		'NULL',
+		'TRUE',
+		'FALSE',
+		'DISTINCT',
+		'ALL',
+		'ASC',
+		'DESC',
+		'THEN',
+		'ELSE',
+		'WHEN',
+		'CASE',
+		'OVER',
+		'FROM',
+		'AND',
+		'OR',
+		'NOT',
+		'IS',
+		'IN',
+		'LIKE',
+		'BETWEEN',
+	]);
 
-	for (const item of items) {
+	for (const rawItem of items) {
+		const item = rawItem.trim();
 		if (!item || item === '*' || /\.\*\s*$/.test(item)) {
 			continue;
 		}
 
-		// 1. Tenta extrair alias explícito: ... AS NOME_COLUNA
-		const explicitAsMatch = /\bAS\s+["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*$/i.exec(item);
+		// 1. Tenta extrair alias explícito com palavra AS: ... AS "NOME_COLUNA" ou ... AS NOME_COLUNA
+		const explicitAsMatch = /\bAS\s+["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?\s*$/i.exec(item);
 		if (explicitAsMatch && explicitAsMatch[1]) {
 			const alias = explicitAsMatch[1].trim().toUpperCase();
-			if (!seenUpper.has(alias)) {
+			if (!reservedTokens.has(alias) && !seenUpper.has(alias)) {
 				seenUpper.add(alias);
 				aliases.push(alias);
 			}
 			continue;
 		}
 
-		// 2. Expressão simples sem AS (ex: NF.DATA_EMISSAO ou CODPROD)
-		const simpleColMatch = /^(?:[A-Za-z_][A-Za-z0-9_]*\.)?["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*$/i.exec(item);
+		// 2. Coluna simples direta sem alias (ex: NF.DATA_EMISSAO ou CODPROD ou "CODPROD")
+		const simpleColMatch = /^(?:[A-Za-z_][A-Za-z0-9_]*\.)?["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?\s*$/i.exec(item);
 		if (simpleColMatch && simpleColMatch[1]) {
 			const col = simpleColMatch[1].trim().toUpperCase();
-			if (!reservedEndTokens.has(col) && !seenUpper.has(col)) {
+			if (!reservedTokens.has(col) && !seenUpper.has(col)) {
 				seenUpper.add(col);
 				aliases.push(col);
 			}
+			continue;
+		}
+
+		// 3. Alias implícito sem a palavra AS (padrão universal Oracle / PostgreSQL / Sankhya)
+		// Ex: CAB.NUNOTA NOTA_ID, SUM(VALOR) TOTAL, CASE ... END STATUS, NVL(X, 0) VALOR
+		const implicitAliasMatch = /\s+["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?\s*$/i.exec(item);
+		if (implicitAliasMatch && implicitAliasMatch[1]) {
+			const col = implicitAliasMatch[1].trim().toUpperCase();
+			if (!reservedTokens.has(col) && !seenUpper.has(col)) {
+				seenUpper.add(col);
+				aliases.push(col);
+			}
+			continue;
 		}
 	}
 

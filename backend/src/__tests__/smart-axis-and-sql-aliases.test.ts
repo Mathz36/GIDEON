@@ -66,6 +66,45 @@ GROUP BY NF.NUMERO_NOTA`;
 			assert.ok(merged.includes('VALOR_LIQUIDO'));
 			assert.ok(merged.includes('VALOR_BRUTO'));
 		});
+
+		it('deve extrair aliases implícitos sem a palavra AS (ex: Oracle / Sankhya: SUM(x) TOTAL, CASE...END TIPO, col ALIAS)', () => {
+			const sqlImplicit = `
+SELECT
+    CAB.NUNOTA NOTA_ID,
+    PAR.NOMEPARC CLIENTE,
+    CASE WHEN CAB.STATUSNOTA = 'L' THEN 'LIBERADA' ELSE 'PENDENTE' END SITUACAO,
+    NVL(CAB.VLRNOTA, 0) TOTAL_NOTA,
+    SUM(ITE.VLRTOT) TOTAL_ITENS
+FROM TGFCAB CAB
+INNER JOIN TGFPAR PAR ON PAR.CODPARC = CAB.CODPARC
+INNER JOIN TGFITE ITE ON ITE.NUNOTA = CAB.NUNOTA
+GROUP BY CAB.NUNOTA, PAR.NOMEPARC, CAB.STATUSNOTA, CAB.VLRNOTA`;
+
+			const aliases = extractSqlSelectAliases(sqlImplicit);
+			assert.deepEqual(aliases, [
+				'NOTA_ID',
+				'CLIENTE',
+				'SITUACAO',
+				'TOTAL_NOTA',
+				'TOTAL_ITENS',
+			]);
+		});
+
+		it('deve extrair aliases do SELECT principal em queries complexas com CTE (WITH ... AS)', () => {
+			const sqlCte = `
+WITH FATURAMENTO_MES AS (
+    SELECT CODVEND, SUM(VLRNOTA) AS TOTAL FROM TGFCAB WHERE DTNEG >= '2026-01-01' GROUP BY CODVEND
+)
+SELECT
+    VEN.CODVEND AS CODIGO,
+    VEN.APELIDO VENDEDOR,
+    FAT.TOTAL AS FATURAMENTO
+FROM FATURAMENTO_MES FAT
+JOIN TGFVEN VEN ON VEN.CODVEND = FAT.CODVEND`;
+
+			const aliases = extractSqlSelectAliases(sqlCte);
+			assert.deepEqual(aliases, ['CODIGO', 'VENDEDOR', 'FATURAMENTO']);
+		});
 	});
 
 	describe('2. Seleção Semântica de Eixos (SmartAxisSelector)', () => {

@@ -208,7 +208,25 @@ apiRouter.post('/erp/extract-sql-columns', requireAdmin, async (req, res, next) 
 		}
 
 		const columns = erpConfigurationService.extractColumnsFromQuery(query, context, primaryKey);
-		res.status(200).json({ data: columns });
+		const expectedFields = columns.map((c) => c.columnName);
+		const columnDescriptions: Record<string, string> = {};
+		for (const col of columns) {
+			columnDescriptions[col.columnName] = col.description;
+		}
+		const suggestedPrimaryKey =
+			primaryKey?.trim() ||
+			expectedFields.find((f) => /^(ID|COD|NUNOTA|CODPARC|CODPROD|CODVEND)/i.test(f)) ||
+			expectedFields[0] ||
+			'';
+
+		res.status(200).json({
+			data: {
+				expectedFields,
+				columnDescriptions,
+				suggestedPrimaryKey,
+				columns,
+			},
+		});
 	} catch (error) {
 		next(error);
 	}

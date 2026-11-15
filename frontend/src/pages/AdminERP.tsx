@@ -242,6 +242,7 @@ export default function AdminERP() {
 		}
 		setIsExtractingSql(true);
 		setError('');
+		setSuccessMsg('');
 		try {
 			const res = await fetch('/api/erp/extract-sql-columns', {
 				method: 'POST',
@@ -256,28 +257,65 @@ export default function AdminERP() {
 				}),
 			});
 			const json = (await res.json()) as {
-				data?: {
-					expectedFields: string[];
-					columnDescriptions: Record<string, string>;
-					suggestedPrimaryKey: string;
-				};
+				data?:
+					| {
+							expectedFields?: string[];
+							columnDescriptions?: Record<string, string>;
+							suggestedPrimaryKey?: string;
+							columns?: Array<{ columnName: string; description: string }>;
+					  }
+					| Array<{ columnName: string; description: string }>;
 				error?: string;
 			};
 			if (!res.ok || !json.data) {
 				throw new Error(json.error ?? 'Não foi possível extrair as colunas do SQL.');
 			}
-			if (json.data.expectedFields.length > 0) {
-				setExpectedFields(json.data.expectedFields);
-				setColumnDescriptions((prev) => ({
-					...json.data?.columnDescriptions,
-					...Object.fromEntries(
-						Object.entries(prev).filter(([, v]) => v && v.trim().length > 0),
-					),
-				}));
-				if (!primaryKey.trim() && json.data.suggestedPrimaryKey) {
-					setPrimaryKey(json.data.suggestedPrimaryKey);
+
+			let extractedFields: string[] = [];
+			let extractedDescriptions: Record<string, string> = {};
+			let suggestedPk = '';
+
+			if (Array.isArray(json.data)) {
+				extractedFields = json.data.map((c) => c.columnName);
+				for (const item of json.data) {
+					if (item.columnName && item.description) {
+						extractedDescriptions[item.columnName] = item.description;
+					}
 				}
+				suggestedPk = extractedFields[0] || '';
+			} else if (json.data && Array.isArray(json.data.expectedFields)) {
+				extractedFields = json.data.expectedFields;
+				extractedDescriptions = json.data.columnDescriptions || {};
+				suggestedPk = json.data.suggestedPrimaryKey || '';
+			} else if (json.data && Array.isArray(json.data.columns)) {
+				extractedFields = json.data.columns.map((c) => c.columnName);
+				for (const item of json.data.columns) {
+					if (item.columnName && item.description) {
+						extractedDescriptions[item.columnName] = item.description;
+					}
+				}
+				suggestedPk = json.data.suggestedPrimaryKey || extractedFields[0] || '';
 			}
+
+			if (extractedFields.length === 0) {
+				throw new Error(
+					'Nenhuma coluna foi identificada na cláusula SELECT da consulta. Certifique-se de listar as colunas explicitamente ou com aliases (ex: SELECT col1, col2 AS alias FROM ...).',
+				);
+			}
+
+			setExpectedFields(extractedFields);
+			setColumnDescriptions((prev) => ({
+				...extractedDescriptions,
+				...Object.fromEntries(
+					Object.entries(prev).filter(([, v]) => v && v.trim().length > 0),
+				),
+			}));
+			if (!primaryKey.trim() && suggestedPk) {
+				setPrimaryKey(suggestedPk);
+			}
+			setSuccessMsg(
+				`${extractedFields.length} coluna(s) extraída(s) com sucesso da consulta SQL!`,
+			);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : 'Erro ao extrair colunas do SQL.');
 		} finally {

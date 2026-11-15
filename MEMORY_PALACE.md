@@ -273,6 +273,30 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/src/server.ts`
   - `MEMORY_PALACE.md`
 
+### [2026-11-15] — Correção e Robustez do Auto-Extrair Colunas do SQL (`/api/erp/extract-sql-columns`)
+- **Agente:** Planner & Full-Stack Squad
+- **Problema Diagnosticado:**
+  - O endpoint `POST /api/erp/extract-sql-columns` devolvia o payload `{ data: columns }` como array de objetos (`Array<{ columnName, description }>`), enquanto o frontend em `AdminERP.tsx` lia `json.data.expectedFields.length`. Isso gerava um `TypeError: Cannot read properties of undefined (reading 'length')` que bloqueava os botões "Auto-extrair Colunas & Sugerir Descrições do SQL" e "Auto-extrair do SQL".
+  - O extrator estático (`extractSqlSelectAliases`) só buscava `SELECT` no início estrito da string (falhando em queries com `WITH ... AS (...)` / CTEs) e não extraía aliases implícitos sem a palavra `AS` (típicos de Oracle e Sankhya, como `TGFCAB.CODPARC CLIENTE`, `SUM(...) TOTAL`, `CASE...END STATUS`).
+- **Ações Implementadas:**
+  1. **Alinhamento do Contrato da API (`backend/src/routes/api.ts`):**
+     - Atualizado para retornar `{ expectedFields, columnDescriptions, suggestedPrimaryKey, columns }`, atendendo perfeitamente o frontend e mantendo retrocompatibilidade.
+  2. **Robustez no Frontend (`frontend/src/pages/AdminERP.tsx`):**
+     - `handleExtractFromSql` agora consome defensivamente tanto o objeto `{ expectedFields, columnDescriptions, suggestedPrimaryKey }` quanto arrays diretos.
+     - Adicionada mensagem clara de sucesso com contador de colunas extraídas (`setSuccessMsg`), e tratamento de erro informativo caso o SQL não possua colunas válidas.
+  3. **Extrator SQL Avançado (`backend/src/utils/sql-alias-extractor.ts`):**
+     - Suporte a queries complexas com CTEs (`WITH ... AS (...) SELECT ...`).
+     - Suporte a aliases implícitos sem `AS` (ex: `PAR.NOMEPARC CLIENTE`, `SUM(ITE.VLRTOT) TOTAL_ITENS`, `CASE WHEN ... END SITUACAO`, `NVL(...) TOTAL`).
+     - Lista expandida de palavras reservadas para evitar falsos positivos (`END`, `NULL`, `TRUE`, `FALSE`, etc.).
+  4. **Suíte de Testes Automatizados (`backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`):**
+     - Novos testes adicionados cobrindo queries com CTEs e aliases implícitos no padrão Oracle/Sankhya (`115/115` testes passando).
+- **Arquivos Afetados:**
+  - `backend/src/routes/api.ts`
+  - `backend/src/utils/sql-alias-extractor.ts`
+  - `backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`
+  - `frontend/src/pages/AdminERP.tsx`
+  - `MEMORY_PALACE.md`
+
 
 ### [2026-11-12] — Transição do Banco de Dados para PostgreSQL Local
 - **Agente Responsável:** `planner` (Tech Lead)
@@ -340,6 +364,30 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
 - **Arquivos Afetados:**
   - `frontend/vite.config.ts`
   - `backend/src/server.ts`
+  - `MEMORY_PALACE.md`
+
+### [2026-11-15] — Correção e Robustez do Auto-Extrair Colunas do SQL (`/api/erp/extract-sql-columns`)
+- **Agente:** Planner & Full-Stack Squad
+- **Problema Diagnosticado:**
+  - O endpoint `POST /api/erp/extract-sql-columns` devolvia o payload `{ data: columns }` como array de objetos (`Array<{ columnName, description }>`), enquanto o frontend em `AdminERP.tsx` lia `json.data.expectedFields.length`. Isso gerava um `TypeError: Cannot read properties of undefined (reading 'length')` que bloqueava os botões "Auto-extrair Colunas & Sugerir Descrições do SQL" e "Auto-extrair do SQL".
+  - O extrator estático (`extractSqlSelectAliases`) só buscava `SELECT` no início estrito da string (falhando em queries com `WITH ... AS (...)` / CTEs) e não extraía aliases implícitos sem a palavra `AS` (típicos de Oracle e Sankhya, como `TGFCAB.CODPARC CLIENTE`, `SUM(...) TOTAL`, `CASE...END STATUS`).
+- **Ações Implementadas:**
+  1. **Alinhamento do Contrato da API (`backend/src/routes/api.ts`):**
+     - Atualizado para retornar `{ expectedFields, columnDescriptions, suggestedPrimaryKey, columns }`, atendendo perfeitamente o frontend e mantendo retrocompatibilidade.
+  2. **Robustez no Frontend (`frontend/src/pages/AdminERP.tsx`):**
+     - `handleExtractFromSql` agora consome defensivamente tanto o objeto `{ expectedFields, columnDescriptions, suggestedPrimaryKey }` quanto arrays diretos.
+     - Adicionada mensagem clara de sucesso com contador de colunas extraídas (`setSuccessMsg`), e tratamento de erro informativo caso o SQL não possua colunas válidas.
+  3. **Extrator SQL Avançado (`backend/src/utils/sql-alias-extractor.ts`):**
+     - Suporte a queries complexas com CTEs (`WITH ... AS (...) SELECT ...`).
+     - Suporte a aliases implícitos sem `AS` (ex: `PAR.NOMEPARC CLIENTE`, `SUM(ITE.VLRTOT) TOTAL_ITENS`, `CASE WHEN ... END SITUACAO`, `NVL(...) TOTAL`).
+     - Lista expandida de palavras reservadas para evitar falsos positivos (`END`, `NULL`, `TRUE`, `FALSE`, etc.).
+  4. **Suíte de Testes Automatizados (`backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`):**
+     - Novos testes adicionados cobrindo queries com CTEs e aliases implícitos no padrão Oracle/Sankhya (`115/115` testes passando).
+- **Arquivos Afetados:**
+  - `backend/src/routes/api.ts`
+  - `backend/src/utils/sql-alias-extractor.ts`
+  - `backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`
+  - `frontend/src/pages/AdminERP.tsx`
   - `MEMORY_PALACE.md`
 
 
@@ -709,4 +757,28 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
 - **Arquivos Afetados:**
   - `frontend/vite.config.ts`
   - `backend/src/server.ts`
+  - `MEMORY_PALACE.md`
+
+### [2026-11-15] — Correção e Robustez do Auto-Extrair Colunas do SQL (`/api/erp/extract-sql-columns`)
+- **Agente:** Planner & Full-Stack Squad
+- **Problema Diagnosticado:**
+  - O endpoint `POST /api/erp/extract-sql-columns` devolvia o payload `{ data: columns }` como array de objetos (`Array<{ columnName, description }>`), enquanto o frontend em `AdminERP.tsx` lia `json.data.expectedFields.length`. Isso gerava um `TypeError: Cannot read properties of undefined (reading 'length')` que bloqueava os botões "Auto-extrair Colunas & Sugerir Descrições do SQL" e "Auto-extrair do SQL".
+  - O extrator estático (`extractSqlSelectAliases`) só buscava `SELECT` no início estrito da string (falhando em queries com `WITH ... AS (...)` / CTEs) e não extraía aliases implícitos sem a palavra `AS` (típicos de Oracle e Sankhya, como `TGFCAB.CODPARC CLIENTE`, `SUM(...) TOTAL`, `CASE...END STATUS`).
+- **Ações Implementadas:**
+  1. **Alinhamento do Contrato da API (`backend/src/routes/api.ts`):**
+     - Atualizado para retornar `{ expectedFields, columnDescriptions, suggestedPrimaryKey, columns }`, atendendo perfeitamente o frontend e mantendo retrocompatibilidade.
+  2. **Robustez no Frontend (`frontend/src/pages/AdminERP.tsx`):**
+     - `handleExtractFromSql` agora consome defensivamente tanto o objeto `{ expectedFields, columnDescriptions, suggestedPrimaryKey }` quanto arrays diretos.
+     - Adicionada mensagem clara de sucesso com contador de colunas extraídas (`setSuccessMsg`), e tratamento de erro informativo caso o SQL não possua colunas válidas.
+  3. **Extrator SQL Avançado (`backend/src/utils/sql-alias-extractor.ts`):**
+     - Suporte a queries complexas com CTEs (`WITH ... AS (...) SELECT ...`).
+     - Suporte a aliases implícitos sem `AS` (ex: `PAR.NOMEPARC CLIENTE`, `SUM(ITE.VLRTOT) TOTAL_ITENS`, `CASE WHEN ... END SITUACAO`, `NVL(...) TOTAL`).
+     - Lista expandida de palavras reservadas para evitar falsos positivos (`END`, `NULL`, `TRUE`, `FALSE`, etc.).
+  4. **Suíte de Testes Automatizados (`backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`):**
+     - Novos testes adicionados cobrindo queries com CTEs e aliases implícitos no padrão Oracle/Sankhya (`115/115` testes passando).
+- **Arquivos Afetados:**
+  - `backend/src/routes/api.ts`
+  - `backend/src/utils/sql-alias-extractor.ts`
+  - `backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`
+  - `frontend/src/pages/AdminERP.tsx`
   - `MEMORY_PALACE.md`
