@@ -255,6 +255,24 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/App.tsx`
   - `MEMORY_PALACE.md`
 
+### [2026-11-15] — Exposição na Rede Local (Host 0.0.0.0 & CORS Flexível para IPs Privados)
+- **Agente:** Planner & DevOps / Full-Stack Squad
+- **Ação:**
+  1. **Configuração de Host no Frontend (`frontend/vite.config.ts`):**
+     - Adicionado `host: '0.0.0.0'` nas seções `server` e `preview` do Vite.
+     - O frontend passa a escutar em todas as interfaces de rede da máquina (ex: `http://192.168.1.8:3090/`), mantendo o proxy reverso automático para `/api` apontando para o backend na porta 3080.
+  2. **Configuração de Host e CORS no Backend (`backend/src/server.ts`):**
+     - Alterado `app.listen` para escutar em `host` (`process.env.HOST ?? '0.0.0.0'`).
+     - Implementado validador dinâmico de CORS que autoriza requisições vindas de `localhost`, `127.0.0.1` e de redes privadas locais (`192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`) em qualquer porta, além das origens configuradas em `CORS_ORIGIN`.
+  3. **Validação Operacional:**
+     - Testes automatizados executados (`113/113` testes passando).
+     - Build de produção do frontend validado com sucesso.
+     - Conexão HTTP testada e confirmada via IP local: `http://192.168.1.8:3090/` (HTTP 200) e `http://192.168.1.8:3090/api/auth/me` (HTTP 401 via proxy com CORS credentials).
+- **Arquivos Afetados:**
+  - `frontend/vite.config.ts`
+  - `backend/src/server.ts`
+  - `MEMORY_PALACE.md`
+
 
 ### [2026-11-12] — Transição do Banco de Dados para PostgreSQL Local
 - **Agente Responsável:** `planner` (Tech Lead)
@@ -304,6 +322,24 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/pages/UserDashboard.tsx`
   - `frontend/src/components/chat/DynamicDashboard.tsx`
   - `frontend/src/App.tsx`
+  - `MEMORY_PALACE.md`
+
+### [2026-11-15] — Exposição na Rede Local (Host 0.0.0.0 & CORS Flexível para IPs Privados)
+- **Agente:** Planner & DevOps / Full-Stack Squad
+- **Ação:**
+  1. **Configuração de Host no Frontend (`frontend/vite.config.ts`):**
+     - Adicionado `host: '0.0.0.0'` nas seções `server` e `preview` do Vite.
+     - O frontend passa a escutar em todas as interfaces de rede da máquina (ex: `http://192.168.1.8:3090/`), mantendo o proxy reverso automático para `/api` apontando para o backend na porta 3080.
+  2. **Configuração de Host e CORS no Backend (`backend/src/server.ts`):**
+     - Alterado `app.listen` para escutar em `host` (`process.env.HOST ?? '0.0.0.0'`).
+     - Implementado validador dinâmico de CORS que autoriza requisições vindas de `localhost`, `127.0.0.1` e de redes privadas locais (`192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`) em qualquer porta, além das origens configuradas em `CORS_ORIGIN`.
+  3. **Validação Operacional:**
+     - Testes automatizados executados (`113/113` testes passando).
+     - Build de produção do frontend validado com sucesso.
+     - Conexão HTTP testada e confirmada via IP local: `http://192.168.1.8:3090/` (HTTP 200) e `http://192.168.1.8:3090/api/auth/me` (HTTP 401 via proxy com CORS credentials).
+- **Arquivos Afetados:**
+  - `frontend/vite.config.ts`
+  - `backend/src/server.ts`
   - `MEMORY_PALACE.md`
 
 
@@ -655,4 +691,22 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/pages/Chat.tsx`
   - `frontend/src/pages/AdminFeedbacks.tsx`
   - `frontend/src/App.tsx`
+  - `MEMORY_PALACE.md`
+
+### [2026-11-15] — Exposição na Rede Local (Host 0.0.0.0 & CORS Flexível para IPs Privados)
+- **Agente:** Planner & DevOps / Full-Stack Squad
+- **Ação:**
+  1. **Configuração de Host no Frontend (`frontend/vite.config.ts`):**
+     - Adicionado `host: '0.0.0.0'` nas seções `server` e `preview` do Vite.
+     - O frontend passa a escutar em todas as interfaces de rede da máquina (ex: `http://192.168.1.8:3090/`), mantendo o proxy reverso automático para `/api` apontando para o backend na porta 3080.
+  2. **Configuração de Host e CORS no Backend (`backend/src/server.ts`):**
+     - Alterado `app.listen` para escutar em `host` (`process.env.HOST ?? '0.0.0.0'`).
+     - Implementado validador dinâmico de CORS que autoriza requisições vindas de `localhost`, `127.0.0.1` e de redes privadas locais (`192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`) em qualquer porta, além das origens configuradas em `CORS_ORIGIN`.
+  3. **Validação Operacional:**
+     - Testes automatizados executados (`113/113` testes passando).
+     - Build de produção do frontend validado com sucesso.
+     - Conexão HTTP testada e confirmada via IP local: `http://192.168.1.8:3090/` (HTTP 200) e `http://192.168.1.8:3090/api/auth/me` (HTTP 401 via proxy com CORS credentials).
+- **Arquivos Afetados:**
+  - `frontend/vite.config.ts`
+  - `backend/src/server.ts`
   - `MEMORY_PALACE.md`

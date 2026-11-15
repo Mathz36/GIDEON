@@ -9,22 +9,45 @@ import authService from './services/auth.service';
 
 const app = express();
 const port = Number(process.env.PORT ?? 3080);
+const host = process.env.HOST ?? '0.0.0.0';
 
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
 	throw new Error('PORT deve ser um numero inteiro entre 1 e 65535.');
 }
 
+// Validador flexível de CORS: permite localhost, 127.0.0.1, IPs da rede local (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+const isOriginAllowed = (origin?: string): boolean => {
+	if (!origin) return true;
+	const configured = process.env.CORS_ORIGIN;
+	if (configured === '*') return true;
+	if (configured && configured.split(',').map((s) => s.trim()).includes(origin)) {
+		return true;
+	}
+	const isLocalOrPrivateNetwork =
+		/^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(
+			origin,
+		);
+	return isLocalOrPrivateNetwork;
+};
+
 app.use(
 	cors({
-		origin: process.env.CORS_ORIGIN ?? 'http://localhost:3090',
+		origin: (origin, callback) => {
+			if (isOriginAllowed(origin)) {
+				callback(null, true);
+			} else {
+				callback(null, false);
+			}
+		},
+		credentials: true,
 	}),
 );
 app.use(express.json({ limit: '1mb' }));
 app.use('/api', apiRouter);
 app.use(apiErrorHandler);
 
-const server = app.listen(port, () => {
-	console.info(`Servidor do Gideon escutando na porta ${port}.`);
+const server = app.listen(port, host, () => {
+	console.info(`Servidor do Gideon escutando em http://${host === '0.0.0.0' ? 'localhost' : host}:${port} (disponível na rede local em http://0.0.0.0:${port}).`);
 	erpSyncScheduler.start();
 	void authService.ensureInitialAdmin();
 });
