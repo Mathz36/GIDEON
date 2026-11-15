@@ -27,7 +27,8 @@ services:
       postgres:
         condition: service_healthy
     env_file:
-      - ./backend/.env
+      - path: ./backend/.env
+        required: false
     environment:
       DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@postgres:5432/${POSTGRES_DB:-gideon_db}?schema=public"
       DIRECT_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@postgres:5432/${POSTGRES_DB:-gideon_db}?schema=public"
