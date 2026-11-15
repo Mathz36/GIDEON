@@ -297,6 +297,24 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `frontend/src/pages/AdminERP.tsx`
   - `MEMORY_PALACE.md`
 
+### [2026-11-15] — Auto-Bootstrap Idempotente do Banco de Dados no Boot (`DatabaseBootstrapService`)
+- **Agente:** Planner & DevOps / Full-Stack Squad
+- **Contexto & Solução de Sincronização entre Máquinas:**
+  - Ao sincronizar o projeto via `git pull` em outras máquinas com bancos de teste/produção independentes, as novas tabelas da plataforma (`chat_feedbacks`, `chat_conversations`, `chat_messages`, `user_memories`, `user_dashboards`, `dashboard_widgets`) não eram criadas automaticamente.
+  - Implementado o `DatabaseBootstrapService` que executa no startup do servidor (`backend/src/server.ts`) uma rotina 100% segura e idempotente com `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS` e chaves estrangeiras com tratamento de duplicidade.
+  - **Garantia Estrita de Isolamento:** Nenhuma tabela de sincronização do ERP (`erp_*`) é tocada, alterada ou apagada.
+  - Adicionado script manual via terminal: `npm run db:bootstrap` (`backend/src/scripts/bootstrap-db.ts`).
+  - Criada migração versionada do Prisma em `backend/prisma/migrations/20261115180000_core_platform_tables/migration.sql`.
+  - Suíte de testes unitários adicionada em `backend/src/__tests__/database-bootstrap.test.ts` (`117/117` testes passando).
+- **Arquivos Afetados:**
+  - `backend/src/services/database-bootstrap.service.ts`
+  - `backend/src/scripts/bootstrap-db.ts`
+  - `backend/src/server.ts`
+  - `backend/package.json`
+  - `backend/prisma/migrations/20261115180000_core_platform_tables/migration.sql`
+  - `backend/src/__tests__/database-bootstrap.test.ts`
+  - `MEMORY_PALACE.md`
+
 
 ### [2026-11-12] — Transição do Banco de Dados para PostgreSQL Local
 - **Agente Responsável:** `planner` (Tech Lead)
@@ -388,6 +406,24 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/src/utils/sql-alias-extractor.ts`
   - `backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`
   - `frontend/src/pages/AdminERP.tsx`
+  - `MEMORY_PALACE.md`
+
+### [2026-11-15] — Auto-Bootstrap Idempotente do Banco de Dados no Boot (`DatabaseBootstrapService`)
+- **Agente:** Planner & DevOps / Full-Stack Squad
+- **Contexto & Solução de Sincronização entre Máquinas:**
+  - Ao sincronizar o projeto via `git pull` em outras máquinas com bancos de teste/produção independentes, as novas tabelas da plataforma (`chat_feedbacks`, `chat_conversations`, `chat_messages`, `user_memories`, `user_dashboards`, `dashboard_widgets`) não eram criadas automaticamente.
+  - Implementado o `DatabaseBootstrapService` que executa no startup do servidor (`backend/src/server.ts`) uma rotina 100% segura e idempotente com `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS` e chaves estrangeiras com tratamento de duplicidade.
+  - **Garantia Estrita de Isolamento:** Nenhuma tabela de sincronização do ERP (`erp_*`) é tocada, alterada ou apagada.
+  - Adicionado script manual via terminal: `npm run db:bootstrap` (`backend/src/scripts/bootstrap-db.ts`).
+  - Criada migração versionada do Prisma em `backend/prisma/migrations/20261115180000_core_platform_tables/migration.sql`.
+  - Suíte de testes unitários adicionada em `backend/src/__tests__/database-bootstrap.test.ts` (`117/117` testes passando).
+- **Arquivos Afetados:**
+  - `backend/src/services/database-bootstrap.service.ts`
+  - `backend/src/scripts/bootstrap-db.ts`
+  - `backend/src/server.ts`
+  - `backend/package.json`
+  - `backend/prisma/migrations/20261115180000_core_platform_tables/migration.sql`
+  - `backend/src/__tests__/database-bootstrap.test.ts`
   - `MEMORY_PALACE.md`
 
 
@@ -781,4 +817,22 @@ Todas as mensagens de commit no projeto devem seguir a especificação em **ingl
   - `backend/src/utils/sql-alias-extractor.ts`
   - `backend/src/__tests__/smart-axis-and-sql-aliases.test.ts`
   - `frontend/src/pages/AdminERP.tsx`
+  - `MEMORY_PALACE.md`
+
+### [2026-11-15] — Auto-Bootstrap Idempotente do Banco de Dados no Boot (`DatabaseBootstrapService`)
+- **Agente:** Planner & DevOps / Full-Stack Squad
+- **Contexto & Solução de Sincronização entre Máquinas:**
+  - Ao sincronizar o projeto via `git pull` em outras máquinas com bancos de teste/produção independentes, as novas tabelas da plataforma (`chat_feedbacks`, `chat_conversations`, `chat_messages`, `user_memories`, `user_dashboards`, `dashboard_widgets`) não eram criadas automaticamente.
+  - Implementado o `DatabaseBootstrapService` que executa no startup do servidor (`backend/src/server.ts`) uma rotina 100% segura e idempotente com `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS` e chaves estrangeiras com tratamento de duplicidade.
+  - **Garantia Estrita de Isolamento:** Nenhuma tabela de sincronização do ERP (`erp_*`) é tocada, alterada ou apagada.
+  - Adicionado script manual via terminal: `npm run db:bootstrap` (`backend/src/scripts/bootstrap-db.ts`).
+  - Criada migração versionada do Prisma em `backend/prisma/migrations/20261115180000_core_platform_tables/migration.sql`.
+  - Suíte de testes unitários adicionada em `backend/src/__tests__/database-bootstrap.test.ts` (`117/117` testes passando).
+- **Arquivos Afetados:**
+  - `backend/src/services/database-bootstrap.service.ts`
+  - `backend/src/scripts/bootstrap-db.ts`
+  - `backend/src/server.ts`
+  - `backend/package.json`
+  - `backend/prisma/migrations/20261115180000_core_platform_tables/migration.sql`
+  - `backend/src/__tests__/database-bootstrap.test.ts`
   - `MEMORY_PALACE.md`
